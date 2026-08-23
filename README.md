@@ -19,11 +19,11 @@ A legitimate material clarification asks for new information that changes what c
 
 Before a consequential action, revalidate the target, relevant external state, safety prerequisites, and approval conditions. If consequential state has become stale or changed, pause for the missing fact or renewed authority when it materially affects the action.
 
-No Re-Ask V0 is a behavior skill. It has no runtime service or external dependency. It is not a phrase blacklist: the decision depends on scope and state, not forbidden wording. It also does not expand authorization, invent credentials, bypass approvals, or make unsafe assumptions.
+No Re-Ask is a behavior skill. It has no runtime service or external dependency. It is not a phrase blacklist: the decision depends on scope and state, not forbidden wording. It also does not expand authorization, invent credentials, bypass approvals, or make unsafe assumptions.
 
 ## Installation
 
-From the cloned repository root, copy or symlink this directory into your agent's skill directory. For Codex, create the skills directory and add a symlink:
+From the cloned repository root, copy or symlink the `no-reask/` runtime directory into your agent's skill directory. For Codex, create the skills directory and add a symlink:
 
 If `~/.codex/skills/no-reask` already exists, rename or remove that target yourself before installing. This guarded snippet refuses to overwrite any existing file, directory, or symlink:
 
@@ -34,7 +34,7 @@ if [ -e "$skill_target" ] || [ -L "$skill_target" ]; then
   printf '%s\n' "$skill_target already exists; rename or remove it before installing."
 else
   mkdir -p ~/.codex/skills
-  ln -s "$(pwd)" "$skill_target"
+  ln -s "$(pwd)/no-reask" "$skill_target"
 fi
 ```
 
@@ -48,10 +48,15 @@ $no-reask Implement the parser and tests, run the test suite, and report the res
 
 ## Repository contents
 
-- `SKILL.md` — behavior instructions and decision boundary.
-- `agents/openai.yaml` — agent-facing display metadata and default prompt.
-- `evals/cases.json` — paired and clarification evaluation cases.
-- `tests/test_package.py` — package contract tests.
+The installable runtime contains only:
+
+- `no-reask/SKILL.md` — behavior instructions and decision boundary.
+- `no-reask/agents/openai.yaml` — agent-facing display metadata and default prompt.
+
+Repository-level development evidence remains outside the runtime:
+
+- `evals/` — evaluation cases, currently `evals/cases.json`.
+- `tests/` — automated repository tests.
 
 ## Validation
 
