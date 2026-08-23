@@ -213,7 +213,7 @@ class ContinuousIntegrationContractTest(unittest.TestCase):
                 fields[key] = self.scalar(raw_value)
         else:
             fields = self.direct_mapping_fields(block)
-        self.assertEqual(fields.get("contents"), "read")
+        self.assertEqual(fields, {"contents": "read"})
 
     def test_workflow_declares_exact_platform_and_python_pairs(self):
         lines = self.yaml_lines(self.read_workflow())
