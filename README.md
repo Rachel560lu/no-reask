@@ -55,8 +55,20 @@ The installable runtime contains only:
 
 Repository-level development evidence remains outside the runtime:
 
-- `evals/` — evaluation cases, currently `evals/cases.json`.
-- `tests/` — automated repository tests.
+- `evals/evaluation-prompts.jsonl` and `evals/evaluation-oracle.jsonl` — separated prompts and judging rules.
+- `evals/evaluation-schedule.jsonl` and `evals/comparator.txt` — the frozen four-condition run matrix and generic comparator.
+- `evals/evaluation-protocol.md` and `evals/score_eval.py` — the evidence protocol and standard-library scorer.
+- `tests/` — automated package, evaluation, and continuous-integration contract tests.
+
+## Behavioral evaluation
+
+Generate model responses and independent judgments externally by following `evals/evaluation-protocol.md`, then score the frozen evidence:
+
+```sh
+python3 -I evals/score_eval.py --schedule evals/evaluation-schedule.jsonl --outputs artifacts/evaluation-outputs.jsonl --judgments artifacts/evaluation-judgments.jsonl --report artifacts/evaluation-report.json
+```
+
+The scorer and continuous integration validate fixture and evidence structure only. Model runs and judgments are external, and passing continuous integration does not measure behavioral efficacy.
 
 ## Validation
 
