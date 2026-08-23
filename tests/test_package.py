@@ -1,4 +1,3 @@
-import json
 import unittest
 from pathlib import Path
 
@@ -11,19 +10,6 @@ class PackageContractTest(unittest.TestCase):
         path = ROOT / relative_path
         self.assertTrue(path.is_file(), f"{relative_path} must exist")
         return path.read_text(encoding="utf-8")
-
-    def load_cases(self):
-        raw = self.read_required("evals/cases.json")
-        try:
-            document = json.loads(raw)
-        except json.JSONDecodeError as error:
-            self.fail(f"evals/cases.json must be valid JSON: {error}")
-
-        self.assertIsInstance(document, dict)
-        cases = document.get("cases")
-        self.assertIsInstance(cases, list)
-        self.assertTrue(cases, "evals/cases.json must contain at least one case")
-        return cases
 
     def parse_scalar(self, raw_value, context):
         value = raw_value.strip()
@@ -105,13 +91,8 @@ class PackageContractTest(unittest.TestCase):
         self.assertTrue(saw_interface, "agents/openai.yaml must define interface")
         return interface
 
-    def assert_non_empty_string(self, mapping, key):
-        self.assertIn(key, mapping)
-        self.assertIsInstance(mapping[key], str)
-        self.assertTrue(mapping[key].strip(), f"{key} must not be empty")
-
     def test_skill_frontmatter(self):
-        skill = self.read_required("SKILL.md")
+        skill = self.read_required("no-reask/SKILL.md")
         lines = skill.splitlines()
         self.assertTrue(lines, "SKILL.md must not be empty")
         self.assertEqual(lines[0], "---", "SKILL.md must start with frontmatter")
@@ -126,7 +107,7 @@ class PackageContractTest(unittest.TestCase):
 
     def test_agent_metadata(self):
         metadata = self.parse_agent_interface(
-            self.read_required("agents/openai.yaml")
+            self.read_required("no-reask/agents/openai.yaml")
         )
 
         self.assertEqual(metadata.get("display_name"), "No Re-Ask")
@@ -138,67 +119,20 @@ class PackageContractTest(unittest.TestCase):
         self.assertIsNotNone(default_prompt)
         self.assertIn("$no-reask", default_prompt)
 
-    def test_every_eval_case_has_required_fields(self):
-        for index, case in enumerate(self.load_cases()):
-            with self.subTest(case=index):
-                self.assertIsInstance(case, dict)
-                for field in ("id", "kind", "user", "candidate"):
-                    self.assert_non_empty_string(case, field)
-                self.assertIn("expected", case)
-                self.assertIsInstance(case["expected"], dict)
-                self.assert_non_empty_string(case["expected"], "status")
-                self.assert_non_empty_string(case["expected"], "reason")
-
-    def test_paired_cases_define_pass_and_reasked_scope_block(self):
-        pairs = {}
-        for case in self.load_cases():
-            if not isinstance(case, dict):
-                continue
-            pair_id = case.get("pair_id")
-            if pair_id is not None:
-                self.assert_non_empty_string(case, "pair_id")
-                pairs.setdefault(pair_id, []).append(case)
-
-        self.assertTrue(pairs, "at least one case must have a non-null pair_id")
-        for pair_id, pair in pairs.items():
-            with self.subTest(pair_id=pair_id):
-                self.assertEqual(len(pair), 2)
-                self.assertEqual(pair[0].get("user"), pair[1].get("user"))
-                statuses = [
-                    case.get("expected", {}).get("status")
-                    if isinstance(case.get("expected"), dict)
-                    else None
-                    for case in pair
-                ]
-                self.assertEqual(statuses.count("PASS"), 1)
-                self.assertEqual(statuses.count("BLOCK"), 1)
-                blocked = pair[statuses.index("BLOCK")]
-                self.assertEqual(blocked["expected"]["reason"], "REASKED_SCOPE")
-
-    def test_eval_cases_include_passing_clarification(self):
-        self.assertTrue(
-            any(
-                case.get("kind") == "CLARIFICATION"
-                and case.get("expected", {}).get("status") == "PASS"
-                for case in self.load_cases()
-                if isinstance(case, dict)
-                and isinstance(case.get("expected"), dict)
-            )
+    def test_installable_runtime_contains_only_skill_and_agent_metadata(self):
+        runtime = ROOT / "no-reask"
+        self.assertTrue(runtime.is_dir(), "no-reask/ must exist")
+        entries = set()
+        for path in runtime.rglob("*"):
+            relative_path = path.relative_to(runtime).as_posix()
+            if path.is_symlink():
+                relative_path += "@"
+            elif path.is_dir():
+                relative_path += "/"
+            entries.add(relative_path)
+        self.assertEqual(
+            entries, {"SKILL.md", "agents/", "agents/openai.yaml"}
         )
-
-    def test_block_cases_describe_both_actions(self):
-        blocked_cases = [
-            case
-            for case in self.load_cases()
-            if isinstance(case, dict)
-            and isinstance(case.get("expected"), dict)
-            and case["expected"].get("status") == "BLOCK"
-        ]
-        self.assertTrue(blocked_cases, "at least one BLOCK case is required")
-        for case in blocked_cases:
-            with self.subTest(case=case.get("id")):
-                for field in ("requested_action", "reasked_action"):
-                    self.assert_non_empty_string(case, field)
 
 
 if __name__ == "__main__":
