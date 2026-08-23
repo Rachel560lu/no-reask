@@ -1,0 +1,4 @@
+interface:
+  display_name: "No Re-Ask"
+  short_description: "Finish authorized work without asking again"
+  default_prompt: "Use $no-reask to finish the work I already requested without asking me to authorize it again."
