@@ -46,8 +46,21 @@ class EvaluationFixtureContractTest(unittest.TestCase):
             self.assertTrue(
                 line.strip(), f"{relative_path} line {line_number} must not be blank"
             )
+
+            def reject_duplicate_members(pairs):
+                value = {}
+                for key, member in pairs:
+                    self.assertNotIn(
+                        key,
+                        value,
+                        f"{relative_path} line {line_number} has duplicate "
+                        f"object member {key!r}",
+                    )
+                    value[key] = member
+                return value
+
             try:
-                row = json.loads(line)
+                row = json.loads(line, object_pairs_hook=reject_duplicate_members)
             except json.JSONDecodeError as error:
                 self.fail(
                     f"{relative_path} line {line_number} must be valid JSON: {error}"
@@ -372,6 +385,60 @@ class ScorerContractTest(unittest.TestCase):
             adjudications_path=adjudications_path,
         )
 
+    def run_cli(
+        self,
+        schedule_path,
+        outputs_path,
+        judgments_path,
+        report_path,
+        adjudications_path=None,
+    ):
+        command = [
+            sys.executable,
+            "-I",
+            str(EVALS / "score_eval.py"),
+            "--schedule",
+            str(schedule_path),
+            "--outputs",
+            str(outputs_path),
+            "--judgments",
+            str(judgments_path),
+        ]
+        if adjudications_path is not None:
+            command.extend(("--adjudications", str(adjudications_path)))
+        command.extend(("--report", str(report_path)))
+        return subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def write_valid_cli_evidence(self, scorer, directory, with_adjudication=False):
+        schedule, outputs, judgments = self.evidence(scorer, directory)
+        adjudications = None
+        if with_adjudication:
+            judgments[1]["behavior_pass"] = False
+            adjudications = [
+                {
+                    "run_id": outputs[0]["run_id"],
+                    "output_sha256": scorer.response_sha256(outputs[0]["response"]),
+                    "behavior_pass": True,
+                    "safety_pass": True,
+                    "reason": "Resolved the behavior disagreement.",
+                }
+            ]
+        paths = {
+            "schedule": self.write_jsonl(directory, "schedule.jsonl", schedule),
+            "outputs": self.write_jsonl(directory, "outputs.jsonl", outputs),
+            "judgments": self.write_jsonl(directory, "judgments.jsonl", judgments),
+        }
+        if adjudications is not None:
+            paths["adjudications"] = self.write_jsonl(
+                directory, "adjudications.jsonl", adjudications
+            )
+        return paths
+
     def test_response_sha256_uses_utf8_text(self):
         scorer = self.load_scorer()
         text = "No Re-Ask \N{CHECK MARK}"
@@ -415,6 +482,77 @@ class ScorerContractTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 2)
         self.assertRegex(completed.stderr, r"(?i)(UTF-8|encode)")
         self.assertNotIn("Traceback", completed.stderr)
+
+    def test_cli_rejects_report_equal_to_each_evidence_input(self):
+        scorer = self.load_scorer()
+        for target_name in ("schedule", "outputs", "judgments", "adjudications"):
+            with self.subTest(target_name=target_name), tempfile.TemporaryDirectory() as temporary_directory:
+                directory = Path(temporary_directory)
+                paths = self.write_valid_cli_evidence(
+                    scorer, directory, with_adjudication=True
+                )
+                before = {name: path.read_bytes() for name, path in paths.items()}
+                completed = self.run_cli(
+                    paths["schedule"],
+                    paths["outputs"],
+                    paths["judgments"],
+                    paths[target_name],
+                    adjudications_path=paths["adjudications"],
+                )
+
+                self.assertEqual(completed.returncode, 2)
+                self.assertRegex(completed.stderr, r"(?i)(report|output).*(alias|input)")
+                self.assertNotIn("Traceback", completed.stderr)
+                self.assertEqual(
+                    {name: path.read_bytes() for name, path in paths.items()}, before
+                )
+
+    def test_cli_rejects_report_through_symlinked_parent(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            evidence_directory = directory / "evidence"
+            evidence_directory.mkdir()
+            paths = self.write_valid_cli_evidence(scorer, evidence_directory)
+            alias_directory = directory / "alias"
+            try:
+                alias_directory.symlink_to(evidence_directory, target_is_directory=True)
+            except OSError as error:
+                self.skipTest(f"directory symlinks are unavailable: {error}")
+            report_path = alias_directory / paths["outputs"].name
+            before = paths["outputs"].read_bytes()
+            completed = self.run_cli(
+                paths["schedule"],
+                paths["outputs"],
+                paths["judgments"],
+                report_path,
+            )
+
+            self.assertEqual(completed.returncode, 2)
+            self.assertNotIn("Traceback", completed.stderr)
+            self.assertEqual(paths["outputs"].read_bytes(), before)
+
+    def test_cli_rejects_report_hard_link_alias(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            paths = self.write_valid_cli_evidence(scorer, directory)
+            report_path = directory / "report.json"
+            try:
+                report_path.hardlink_to(paths["judgments"])
+            except OSError as error:
+                self.skipTest(f"hard links are unavailable: {error}")
+            before = paths["judgments"].read_bytes()
+            completed = self.run_cli(
+                paths["schedule"],
+                paths["outputs"],
+                paths["judgments"],
+                report_path,
+            )
+
+            self.assertEqual(completed.returncode, 2)
+            self.assertNotIn("Traceback", completed.stderr)
+            self.assertEqual(paths["judgments"].read_bytes(), before)
 
     def test_complete_agreed_evidence_reports_condition_counts_and_passes(self):
         scorer = self.load_scorer()

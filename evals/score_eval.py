@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -342,9 +343,49 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_report_destination(
+    report_value: str,
+    evidence_values: Sequence[tuple[str, str]],
+) -> None:
+    report_path = Path(report_value)
+    try:
+        resolved_report = report_path.resolve(strict=False)
+    except (OSError, RuntimeError) as error:
+        raise EvidenceError(f"cannot resolve --report path {report_path}: {error}") from error
+
+    for option, evidence_value in evidence_values:
+        evidence_path = Path(evidence_value)
+        try:
+            resolved_evidence = evidence_path.resolve(strict=False)
+        except (OSError, RuntimeError) as error:
+            raise EvidenceError(
+                f"cannot resolve {option} path {evidence_path}: {error}"
+            ) from error
+
+        aliases_input = resolved_report == resolved_evidence
+        if not aliases_input and report_path.exists() and evidence_path.exists():
+            try:
+                aliases_input = os.path.samefile(report_path, evidence_path)
+            except OSError as error:
+                raise EvidenceError(
+                    f"cannot compare --report path with {option}: {error}"
+                ) from error
+        if aliases_input:
+            raise EvidenceError(f"--report path must not alias {option} input")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.report:
+            evidence_values = [
+                ("--schedule", args.schedule),
+                ("--outputs", args.outputs),
+                ("--judgments", args.judgments),
+            ]
+            if args.adjudications:
+                evidence_values.append(("--adjudications", args.adjudications))
+            _validate_report_destination(args.report, evidence_values)
         report = score_evidence(
             args.schedule,
             args.outputs,
