@@ -21,6 +21,7 @@ REQUIRED_TAGS = {
     "missing-authority",
     "optional-adjacent",
     "non-activation",
+    "tool-using",
 }
 MIGRATED_SCENARIOS = {
     "parser-tests",
@@ -102,7 +103,7 @@ class EvaluationFixtureContractTest(unittest.TestCase):
             context = f"evaluation-prompts.jsonl row {index}"
             self.assertEqual(
                 set(row),
-                {"case_id", "title", "tags", "messages"},
+                {"case_id", "title", "tags", "messages", "fixture"},
                 f"{context} must contain prompt fields only",
             )
             for field in ("case_id", "title"):
@@ -147,15 +148,25 @@ class EvaluationFixtureContractTest(unittest.TestCase):
         case_ids = []
         required = {
             "case_id",
-            "behavior_rule",
-            "safety_rule",
+            "continuity_rule",
+            "task_rule",
+            "boundary_rule",
+            "readback_paths",
             "implicit_activation_expected",
         }
         for index, row in enumerate(rows, start=1):
             context = f"evaluation-oracle.jsonl row {index}"
             self.assertEqual(set(row), required, f"{context} has wrong fields")
-            for field in ("case_id", "behavior_rule", "safety_rule"):
+            for field in ("case_id", "continuity_rule", "task_rule", "boundary_rule"):
                 self.assert_non_empty_string(row, field, context)
+            self.assertIsInstance(
+                row["readback_paths"], list, f"{context}.readback_paths must be a list"
+            )
+            for relative_path in row["readback_paths"]:
+                self.assertIsInstance(relative_path, str)
+                self.assertTrue(relative_path)
+                self.assertFalse(Path(relative_path).is_absolute())
+                self.assertNotIn("..", Path(relative_path).parts)
             self.assertIsInstance(
                 row["implicit_activation_expected"],
                 bool,
@@ -218,10 +229,15 @@ class EvaluationFixtureContractTest(unittest.TestCase):
         for index, row in enumerate(rows, start=1):
             context = f"evaluation-schedule.jsonl row {index}"
             self.assertEqual(
-                set(row), {"run_id", "case_id", "condition"}, f"{context} has wrong fields"
+                set(row),
+                {"run_id", "case_id", "condition", "corpus", "repetition", "seed"},
+                f"{context} has wrong fields",
             )
             for field in ("run_id", "case_id", "condition"):
                 self.assert_non_empty_string(row, field, context)
+            self.assertEqual(row["corpus"], "development")
+            self.assertEqual(row["repetition"], 1)
+            self.assertIsNone(row["seed"])
             run_ids.append(row["run_id"])
             pairs.append((row["case_id"], row["condition"]))
 
@@ -238,7 +254,26 @@ class EvaluationFixtureContractTest(unittest.TestCase):
         rows = self.load_jsonl("evaluation-schedule.jsonl")
         self.assertEqual(
             [row["run_id"] for row in rows],
-            [f"run-{index:03d}" for index in range(1, 33)],
+            [f"run-{index:03d}" for index in range(1, 41)],
+        )
+
+    def test_prompt_fixtures_are_safe_and_exist(self):
+        rows = self.load_jsonl("evaluation-prompts.jsonl")
+        fixture_rows = []
+        for row in rows:
+            fixture = row["fixture"]
+            self.assertTrue(fixture is None or isinstance(fixture, str))
+            if fixture is None:
+                continue
+            self.assertTrue(fixture)
+            self.assertFalse(Path(fixture).is_absolute())
+            self.assertNotIn("..", Path(fixture).parts)
+            fixture_path = EVALS / "fixtures" / fixture
+            self.assertTrue(fixture_path.is_dir())
+            fixture_rows.append(row)
+        self.assertEqual(
+            {row["case_id"] for row in fixture_rows},
+            {"tool-parser-tests", "tool-fix-tests"},
         )
 
     def test_response_only_cases_are_self_contained(self):
@@ -270,7 +305,7 @@ class EvaluationFixtureContractTest(unittest.TestCase):
                     self.assertIn(phrase, prompts[case_id])
 
         oracle = {
-            row["case_id"]: row["safety_rule"]
+            row["case_id"]: row["boundary_rule"]
             for row in self.load_jsonl("evaluation-oracle.jsonl")
         }
         for case_id in required_phrases:
@@ -283,24 +318,24 @@ class EvaluationFixtureContractTest(unittest.TestCase):
     def test_protocol_defines_transformations_manifest_and_blinding(self):
         protocol = self.read_required("evals/evaluation-protocol.md")
         required_text = (
+            "schema version 2",
             "canonical prompt messages unchanged",
-            "prepend exactly one `system` message",
-            "exact contents of `comparator.txt`, byte for byte",
-            "prefix the first `user` message content with `$no-reask `",
-            "`artifacts/run-manifest.json`",
-            '"experiment_id":"string"',
-            '"host":"string"',
-            '"host_version":"string"',
-            '"model":"string"',
-            '"model_version":"string"',
-            '"settings":{}',
-            "one shared manifest covers all four conditions",
-            "scorer does not validate environment parity",
+            "byte for byte",
+            "$no-reask ",
+            "trajectory",
+            "readbacks",
+            "routing trace",
+            "intention to treat",
+            "pilot",
+            "continuity_pass",
+            "task_pass",
+            "boundary_pass",
+            "joint_pass",
+            "development",
+            "holdout",
+            "Runtime Guard",
             "opaque `blind_id`",
-            "canonical untransformed prompt",
-            "must not contain the condition, injected instruction, run ID, or case name",
-            "After all first-pass judgments have been collected",
-            "at least two independent, blinded judge records",
+            "two independent",
         )
         for text in required_text:
             with self.subTest(text=text):
