@@ -37,6 +37,15 @@ host instructions. Filesystem and tool permissions deny access to this
 repository, the oracle, other conditions, prior trajectory evidence, judgments,
 and holdout source. A prompt instruction not to read the oracle is not isolation.
 
+The public smoke runner creates each workspace outside the checkout and destroys
+it after trusted collection. Its protected self-hosted workflow freezes host,
+model, settings, system-instruction digest, tool permissions, and isolation
+attestations from `/opt/no-reask/eval-environment.json`. The fixed adapter is part
+of the trusted computing base: it must enforce the attested OS/container or VM
+sandbox, credential separation, process cleanup, and network/tool policy. A
+temporary working directory alone is not sufficient isolation, so evidence from
+an adapter that cannot enforce those controls remains pilot-only.
+
 A trusted collector, not the producer, freezes the ordered trajectory, declared
 file readbacks, Git status and diff, adapter exit status, and host routing trace.
 It never infers execution from the final response. Missing, crashed, and timed-out

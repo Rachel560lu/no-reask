@@ -12,25 +12,25 @@ concurrency:
 
 jobs:
   collect:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    environment: no-reask-evaluation
     runs-on: [self-hosted, no-reask-eval]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Collect pilot evidence
         run: >-
           python3 -I evals/run_smoke.py
           --adapter /opt/no-reask/bin/producer-adapter
           --artifacts artifacts
-          --host-product configured-host
-          --host-surface self-hosted-eval
-          --host-version configured-by-adapter
-          --host-build configured-by-adapter
-          --model configured-by-adapter
-          --model-snapshot configured-by-adapter
+          --environment-snapshot /opt/no-reask/eval-environment.json
           --timeout-seconds 300
       - name: Upload frozen pilot evidence
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: no-reask-model-smoke-pilot
           path: artifacts/

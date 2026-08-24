@@ -91,9 +91,9 @@ No Re-Ask 是一项行为技能，也是一种提示词层面的缓解措施。�
 
 ## 行为评测
 
-验证被明确分成三层。每次提交运行的确定性 CI 只验证技能包、fixture、harness 和评分器机制，不接收模型凭证，也不调用模型。手动触发的模型冒烟评测通过固定的可信 adapter 执行公开的四条件调度，并将产物标记为 `pilot_no_efficacy_claim`。正式发布评测还必须预注册 host 和模型快照，进行重复运行，使用未公开 holdout、独立盲审、routing 覆盖率和按提示聚类的置信区间。
+验证被明确分成三层。每次提交运行的确定性 CI 只验证技能包、fixture、harness 和评分器机制，不接收模型凭证，也不调用模型。手动触发的模型冒烟评测通过固定的可信 adapter 执行公开的四条件调度，并将产物标记为 `pilot_no_efficacy_claim`。受保护的 self-hosted workflow 只接受默认分支，不保留 checkout 凭证，并从 `/opt/no-reask/eval-environment.json` 读取 host、模型、设置、隔离和工具权限证明；adapter 仍必须实际执行声明的 OS/container sandbox。正式发布评测还必须预注册环境快照，进行重复运行，分开开发集与未公开 holdout，使用独立盲审、routing 覆盖率和按 corpus/提示聚类的置信区间。
 
-评分器分别报告 `continuity_pass`、`task_pass` 和 `boundary_pass`，并另外报告三者同时通过的联合结果。这样，减少重复询问就不能掩盖漏做任务或不安全的持续执行。Routing 只能来自独立 host trace，不能从答案措辞反推。
+schema-v2 评分器分别报告 `continuity_pass`、`task_pass` 和 `boundary_pass`，并另外报告三者同时通过的联合结果。这样，减少重复询问就不能掩盖漏做任务或不安全的持续执行。必需 readback 缺失会导致任务保真失败；Routing 只能来自独立 host trace，不能从答案措辞反推。兼容性评分器会明确标记为 `untrusted_legacy`，不能用来支持 efficacy claim。
 
 请先遵循本地的 [`evals/evaluation-protocol.md`](evals/evaluation-protocol.md)，再使用以下命令对准备好的输出和判定结果评分：
 

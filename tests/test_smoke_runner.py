@@ -1,12 +1,15 @@
 import importlib.util
+import hashlib
 import json
 import os
+import shutil
 import stat
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,6 +50,16 @@ print(json.dumps({
             "crash": "raise SystemExit(7)\n",
             "invalid": "print('not-json')\n",
             "timeout": "import time\ntime.sleep(2)\n",
+            "tamper": """
+packet = json.load(sys.stdin)
+skill = Path(".agents/skills/no-reask/SKILL.md")
+skill.write_text(skill.read_text(encoding="utf-8") + "\\ntampered\\n", encoding="utf-8")
+print(json.dumps({
+    "trajectory": [{"sequence": 1, "type": "final_response", "data": {"text": "done"}}],
+    "activation_observed": True,
+    "routing_source": "fake-host-skill-event-v1",
+}))
+""",
         }
         source = (
             f"#!{sys.executable}\n"
@@ -143,13 +156,63 @@ print(json.dumps({
             directory = Path(temporary_directory)
             adapter = self.make_adapter(directory)
             artifacts = directory / "artifacts"
-            summary = runner.run_smoke(self.args(adapter, artifacts))
+            environment_snapshot = directory / "environment.json"
+            environment_snapshot.write_text(
+                json.dumps(
+                    {
+                        "reference_host": {
+                            "product": "snapshot-host",
+                            "surface": "snapshot-surface",
+                            "version": "2.0",
+                            "build": "build-2",
+                        },
+                        "model": {
+                            "name": "snapshot-model",
+                            "snapshot": "snapshot-2",
+                        },
+                        "settings": {"temperature": 0},
+                        "system_instruction_sha256": "a" * 64,
+                        "context_limit": 200000,
+                        "compaction_policy": "disabled",
+                        "tool_permissions": {
+                            "profile": "synthetic-write",
+                            "filesystem_scope": "workspace-only",
+                            "network_policy": "deny-by-default",
+                            "external_side_effect_policy": "synthetic-only",
+                        },
+                        "isolation": {
+                            "profile": "adapter-sandbox-v1",
+                            "mechanism": "ephemeral-container",
+                            "filesystem_isolated": True,
+                            "credentials_isolated": True,
+                            "process_tree_cleanup": True,
+                            "attested_by": "evaluation-operator",
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            original_run_one = runner.run_one
+            manifest_was_frozen = []
+
+            def checking_run_one(*args, **kwargs):
+                manifest_was_frozen.append(
+                    (artifacts / "run-manifest.json").is_file()
+                )
+                return original_run_one(*args, **kwargs)
+
+            arguments = self.args(adapter, artifacts)
+            arguments.environment_snapshot = environment_snapshot
+            with mock.patch.object(runner, "run_one", side_effect=checking_run_one):
+                summary = runner.run_smoke(arguments)
 
             self.assertEqual(summary["result_label"], "pilot")
             self.assertEqual(summary["claim_status"], "pilot_no_efficacy_claim")
             self.assertEqual(summary["scheduled"], 40)
             self.assertEqual(summary["completed"], 40)
             self.assertEqual(summary["efficacy_result"], None)
+            self.assertEqual(manifest_was_frozen, [True] * 40)
             required = {
                 "run-manifest.json",
                 "evaluation-schedule.jsonl",
@@ -161,18 +224,67 @@ print(json.dumps({
             manifest = json.loads((artifacts / "run-manifest.json").read_text())
             self.assertEqual(manifest["schema_version"], 2)
             self.assertEqual(manifest["result_label"], "pilot")
+            self.assertEqual(manifest["reference_host"]["product"], "snapshot-host")
+            self.assertEqual(manifest["model"]["name"], "snapshot-model")
+            self.assertEqual(manifest["settings"]["temperature"], 0)
+            self.assertEqual(
+                manifest["settings"]["environment_snapshot_sha256"],
+                hashlib.sha256(environment_snapshot.read_bytes()).hexdigest(),
+            )
             self.assertEqual(len(manifest["run_ids"]), 40)
             outputs = [
                 json.loads(line)
                 for line in (artifacts / "evaluation-outputs.jsonl").read_text().splitlines()
             ]
             self.assertEqual(len(outputs), 40)
-            workdirs = {event["data"].get("working_directory") for output in outputs for event in output["trajectory"] if event["type"] == "collector"}
-            self.assertEqual(len(workdirs), 40)
-            for workdir in workdirs:
-                names = {path.name for path in Path(workdir).iterdir()}
-                self.assertNotIn("evaluation-oracle.jsonl", names)
-                self.assertNotIn("evaluation-judgments.jsonl", names)
+            for output in outputs:
+                git_readback = output["readbacks"]["$git"]
+                self.assertNotIn(".agents", git_readback["status"])
+                self.assertNotIn(".agents", git_readback["diff"])
+            collector_events = [
+                event
+                for output in outputs
+                for event in output["trajectory"]
+                if event["type"] == "collector"
+            ]
+            self.assertEqual(len(collector_events), 40)
+            self.assertTrue(
+                all(event["data"] == {"workspace_retained": False} for event in collector_events)
+            )
+            self.assertFalse((artifacts / "runs").exists())
+
+    def test_environment_snapshot_rejects_empty_isolation_attestation(self):
+        runner = self.load_runner()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "environment.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "reference_host": {
+                            "product": "host",
+                            "surface": "surface",
+                            "version": "1",
+                            "build": "1",
+                        },
+                        "model": {"name": "model", "snapshot": "snapshot"},
+                        "settings": {},
+                        "system_instruction_sha256": "a" * 64,
+                        "context_limit": 1000,
+                        "compaction_policy": "disabled",
+                        "tool_permissions": {
+                            "profile": "synthetic-write",
+                            "filesystem_scope": "workspace-only",
+                            "network_policy": "deny-by-default",
+                            "external_side_effect_policy": "synthetic-only",
+                        },
+                        "isolation": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(runner.EvidenceError, r"(?i)isolation"):
+                runner.load_environment_snapshot(path)
 
     def test_runner_collects_declared_files_instead_of_adapter_readbacks(self):
         runner = self.load_runner()
@@ -190,6 +302,59 @@ print(json.dumps({
         self.assertFalse(readbacks["missing.txt"]["exists"])
         with self.assertRaises(runner.EvidenceError):
             runner.collect_readbacks(workdir, ["../oracle.jsonl"])
+
+    def test_runner_rejects_readback_through_symlinked_parent(self):
+        runner = self.load_runner()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            workdir = directory / "work"
+            outside = directory / "outside"
+            workdir.mkdir()
+            outside.mkdir()
+            (outside / "oracle.txt").write_text("secret\n", encoding="utf-8")
+            (workdir / "linked").symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaisesRegex(runner.EvidenceError, r"(?i)escapes"):
+                runner.collect_readbacks(workdir, ["linked/oracle.txt"])
+
+    def test_runner_rejects_oversized_readback_before_reading_it(self):
+        runner = self.load_runner()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workdir = Path(temporary_directory)
+            (workdir / "large.txt").write_bytes(
+                b"a" * (runner.MAX_READBACK_BYTES + 1)
+            )
+
+            with self.assertRaisesRegex(runner.EvidenceError, r"(?i)too large"):
+                runner.collect_readbacks(workdir, ["large.txt"])
+
+    def test_runner_preserves_evidence_of_runtime_skill_tampering(self):
+        runner = self.load_runner()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            adapter = self.make_adapter(directory, "tamper")
+            runtime_snapshot = directory / "runtime"
+            shutil.copytree(ROOT / "no-reask", runtime_snapshot)
+            output, _ = runner._execute_scheduled_run(
+                self.args(adapter, directory / "artifacts"),
+                {
+                    "run_id": "run-tamper",
+                    "case_id": "case-tamper",
+                    "condition": "explicit",
+                },
+                {
+                    "case_id": "case-tamper",
+                    "messages": [{"role": "user", "content": "Finish it."}],
+                    "fixture": None,
+                },
+                {"case_id": "case-tamper", "readback_paths": []},
+                "Finish the request.\n",
+                runtime_snapshot,
+            )
+
+        git_evidence = output["readbacks"]["$git"]
+        self.assertIn(".agents/skills/no-reask/SKILL.md", git_evidence["status"])
+        self.assertIn("tampered", git_evidence["diff"])
 
 
 if __name__ == "__main__":

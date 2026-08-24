@@ -347,7 +347,7 @@ def score_evidence(
                 summary[count_field] += int(verdict)
         per_condition[condition] = summary
 
-    return {"per_condition": per_condition}
+    return {"trust": "untrusted_legacy", "per_condition": per_condition}
 
 
 def _parser() -> argparse.ArgumentParser:

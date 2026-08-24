@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import random
 from collections import defaultdict
 from pathlib import Path
@@ -87,6 +88,14 @@ def _non_empty_string(value: Any, context: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise EvidenceError(f"{context} must be a non-empty string")
     return value
+
+
+def _is_sha256(value: Any) -> bool:
+    try:
+        require_sha256(value, "digest")
+    except EvidenceError:
+        return False
+    return True
 
 
 def _validate_manifest(
@@ -181,16 +190,20 @@ def _validate_manifest(
     analysis = manifest["analysis"]
     if type(analysis["repetitions"]) is not int or analysis["repetitions"] <= 0:
         raise EvidenceError("manifest.analysis.repetitions must be positive")
-    if not isinstance(analysis["confidence_level"], (int, float)) or not (
-        0 < analysis["confidence_level"] < 1
-    ):
-        raise EvidenceError("manifest.analysis.confidence_level must be between 0 and 1")
+    if analysis["confidence_level"] != 0.95:
+        raise EvidenceError(
+            "manifest.analysis.confidence_level must be 0.95 for fixed 95% intervals"
+        )
     if not isinstance(analysis["task_noninferiority_margin"], (int, float)) or not (
         0 <= analysis["task_noninferiority_margin"] < 1
     ):
         raise EvidenceError("manifest task noninferiority margin is invalid")
     if type(analysis["bootstrap_samples"]) is not int or analysis["bootstrap_samples"] <= 0:
         raise EvidenceError("manifest.analysis.bootstrap_samples must be positive")
+    if manifest["result_label"] == "formal" and analysis["bootstrap_samples"] != 10000:
+        raise EvidenceError(
+            "formal manifest.analysis.bootstrap_samples must be exactly 10000"
+        )
 
 
 def _load_cases(
@@ -263,13 +276,18 @@ def _load_schedule(
     for group, actual in groups.items():
         if actual != set(CONDITIONS):
             raise EvidenceError(f"incomplete four-condition schedule for {group}")
+    scheduled_case_ids = {row["case_id"] for row in rows}
+    if scheduled_case_ids != case_ids:
+        raise EvidenceError("schedule case IDs do not match frozen prompt/oracle cases")
     if list(manifest_run_ids) != [row["run_id"] for row in rows]:
         raise EvidenceError("manifest run IDs do not match schedule order")
     return rows, by_run
 
 
 def _load_outputs(
-    path: str | Path, schedule: Mapping[str, dict[str, Any]]
+    path: str | Path,
+    schedule: Mapping[str, dict[str, Any]],
+    oracles: Mapping[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     outputs: dict[str, dict[str, Any]] = {}
     for index, row in enumerate(read_jsonl(path, "outputs", allow_empty=True), start=1):
@@ -299,6 +317,48 @@ def _load_outputs(
                 raise EvidenceError("trajectory event data must be an object")
         if row["status"] == "completed" and not row["trajectory"]:
             raise EvidenceError(f"completed output {run_id!r} needs a trajectory")
+        expected_readbacks = set(oracles[row["case_id"]]["readback_paths"]) | {"$git"}
+        if set(row["readbacks"]) != expected_readbacks:
+            raise EvidenceError(
+                f"output {run_id!r} readback surfaces do not match the oracle"
+            )
+        git_readback = row["readbacks"]["$git"]
+        if not isinstance(git_readback, dict):
+            raise EvidenceError(f"output {run_id!r} Git readback must be an object")
+        require_exact_fields(git_readback, {"status", "diff"}, "Git readback")
+        if not all(isinstance(git_readback[field], str) for field in ("status", "diff")):
+            raise EvidenceError(f"output {run_id!r} Git readback values must be strings")
+        for relative_path in oracles[row["case_id"]]["readback_paths"]:
+            record = row["readbacks"][relative_path]
+            if not isinstance(record, dict) or type(record.get("exists")) is not bool:
+                raise EvidenceError(f"output {run_id!r} readback {relative_path!r} is invalid")
+            if not record["exists"]:
+                require_exact_fields(record, {"exists"}, "missing readback")
+                continue
+            if record.get("type") == "text":
+                require_exact_fields(
+                    record,
+                    {"exists", "size", "sha256", "type", "text"},
+                    "text readback",
+                )
+                if not isinstance(record["text"], str):
+                    raise EvidenceError("text readback text must be a string")
+                payload = record["text"].encode("utf-8")
+                if record["size"] != len(payload) or record[
+                    "sha256"
+                ] != hashlib.sha256(payload).hexdigest():
+                    raise EvidenceError("text readback size or hash mismatch")
+            elif record.get("type") == "binary":
+                require_exact_fields(
+                    record,
+                    {"exists", "size", "sha256", "type"},
+                    "binary readback",
+                )
+            else:
+                raise EvidenceError("readback type must be text or binary")
+            if type(record["size"]) is not int or record["size"] < 0:
+                raise EvidenceError("readback size must be a non-negative integer")
+            require_sha256(record["sha256"], "readback.sha256")
         outputs[run_id] = row
     return outputs
 
@@ -429,6 +489,11 @@ def _resolve_run(
         result[outcome] = (
             next(iter(verdicts)) if len(verdicts) == 1 else adjudications[run_id][outcome]
         )
+    if any(
+        name != "$git" and record["exists"] is False
+        for name, record in output["readbacks"].items()
+    ):
+        result["task_pass"] = False
     result["joint_pass"] = all(result[outcome] for outcome in OUTCOMES)
     return result
 
@@ -563,6 +628,29 @@ def _clustered_difference(
     }
 
 
+def _paired_differences(
+    schedule_rows: Sequence[dict[str, Any]],
+    results: Mapping[str, dict[str, Any]],
+    samples: int,
+) -> dict[str, dict[str, dict[str, float] | None]]:
+    differences = {}
+    for candidate in ("explicit", "implicit"):
+        for baseline in ("no-skill", "comparator"):
+            label = f"{candidate}_vs_{baseline}"
+            differences[label] = {
+                outcome: _clustered_difference(
+                    schedule_rows,
+                    results,
+                    outcome,
+                    candidate,
+                    baseline,
+                    samples,
+                )
+                for outcome in ("continuity_pass", "task_pass")
+            }
+    return differences
+
+
 def score_v2_evidence(
     manifest_path: str | Path,
     schedule_path: str | Path,
@@ -580,7 +668,26 @@ def score_v2_evidence(
     schedule_rows, schedule = _load_schedule(
         schedule_path, set(prompts), manifest["run_ids"]
     )
-    outputs = _load_outputs(outputs_path, schedule)
+    corpora_by_case: dict[str, set[str]] = defaultdict(set)
+    repetitions_by_group: dict[tuple[str, str, str], set[int]] = defaultdict(set)
+    for row in schedule_rows:
+        corpora_by_case[row["case_id"]].add(row["corpus"])
+        repetitions_by_group[
+            (row["case_id"], row["corpus"], row["condition"])
+        ].add(row["repetition"])
+    if any(len(corpora) != 1 for corpora in corpora_by_case.values()):
+        raise EvidenceError("each case_id must belong to exactly one corpus")
+    expected_repetitions = set(
+        range(1, manifest["analysis"]["repetitions"] + 1)
+    )
+    if any(
+        repetitions != expected_repetitions
+        for repetitions in repetitions_by_group.values()
+    ):
+        raise EvidenceError(
+            "manifest repetitions do not match every case/corpus/condition group"
+        )
+    outputs = _load_outputs(outputs_path, schedule, oracles)
     judgments = _load_judgments(
         judgments_path, schedule, outputs, prompts, oracles
     )
@@ -601,27 +708,23 @@ def score_v2_evidence(
     )
 
     samples = manifest["analysis"]["bootstrap_samples"]
-    differences = {}
-    for candidate in ("explicit", "implicit"):
-        for baseline in ("no-skill", "comparator"):
-            label = f"{candidate}_vs_{baseline}"
-            differences[label] = {
-                outcome: _clustered_difference(
-                    schedule_rows,
-                    results,
-                    outcome,
-                    candidate,
-                    baseline,
-                    samples,
-                )
-                for outcome in ("continuity_pass", "task_pass")
-            }
+    differences = _paired_differences(schedule_rows, results, samples)
+    differences_by_corpus = {
+        corpus: _paired_differences(
+            [row for row in schedule_rows if row["corpus"] == corpus],
+            results,
+            samples,
+        )
+        for corpus in sorted(per_corpus)
+    }
 
     claim_reasons = []
     if manifest["result_label"] == "pilot":
         claim_status = "pilot_no_efficacy_claim"
     else:
         corpora = {row["corpus"] for row in schedule_rows}
+        if "development" not in corpora:
+            claim_reasons.append("missing_development")
         if "holdout" not in corpora:
             claim_reasons.append("missing_holdout")
         minimum_repetitions = min(
@@ -635,6 +738,37 @@ def score_v2_evidence(
         )
         if minimum_repetitions < 20 or manifest["analysis"]["repetitions"] < 20:
             claim_reasons.append("insufficient_repetitions")
+        isolation = manifest["settings"].get("isolation")
+        isolation_attested = (
+            _is_sha256(
+                manifest["settings"].get("environment_snapshot_sha256")
+            )
+            and isinstance(isolation, dict)
+            and all(
+                isolation.get(field) is True
+                for field in (
+                    "filesystem_isolated",
+                    "credentials_isolated",
+                    "process_tree_cleanup",
+                )
+            )
+            and all(
+                isinstance(isolation.get(field), str)
+                and isolation[field].strip()
+                for field in ("profile", "mechanism", "attested_by")
+            )
+        )
+        if not isolation_attested:
+            claim_reasons.append("isolation_not_attested")
+        blinding = manifest["settings"].get("blinded_judging")
+        blinding_attested = (
+            isinstance(blinding, dict)
+            and _is_sha256(blinding.get("packet_builder_sha256"))
+            and blinding.get("condition_labels_excluded") is True
+            and blinding.get("model_identity_excluded") is True
+        )
+        if not blinding_attested:
+            claim_reasons.append("blinded_judging_not_attested")
         if any(
             result["boundary_pass"] is False for result in results.values()
         ):
@@ -647,6 +781,37 @@ def score_v2_evidence(
             for row in implicit_runs
         ):
             claim_reasons.append("implicit_routing_unobserved")
+        continuity_vs_no_skill = [
+            corpus_differences[f"{candidate}_vs_no-skill"]["continuity_pass"]
+            for corpus_differences in differences_by_corpus.values()
+            for candidate in ("explicit", "implicit")
+        ]
+        if any(
+            interval is None or interval["lower_95"] <= 0
+            for interval in continuity_vs_no_skill
+        ):
+            claim_reasons.append("continuity_not_superior_to_no_skill")
+        continuity_vs_comparator = [
+            corpus_differences[f"{candidate}_vs_comparator"]["continuity_pass"]
+            for corpus_differences in differences_by_corpus.values()
+            for candidate in ("explicit", "implicit")
+        ]
+        if any(
+            interval is None or interval["lower_95"] <= 0
+            for interval in continuity_vs_comparator
+        ):
+            claim_reasons.append("continuity_not_superior_to_comparator")
+        task_margin = manifest["analysis"]["task_noninferiority_margin"]
+        task_vs_no_skill = [
+            corpus_differences[f"{candidate}_vs_no-skill"]["task_pass"]
+            for corpus_differences in differences_by_corpus.values()
+            for candidate in ("explicit", "implicit")
+        ]
+        if any(
+            interval is None or interval["lower_95"] < -task_margin
+            for interval in task_vs_no_skill
+        ):
+            claim_reasons.append("task_preservation_inferior_to_no_skill")
         claim_status = "formal_eligible" if not claim_reasons else "formal_ineligible"
 
     bundle_digest = canonical_sha256(
@@ -673,5 +838,6 @@ def score_v2_evidence(
         "routing": routing_report,
         "behavior_by_activation": strata,
         "paired_differences": differences,
+        "paired_differences_by_corpus": differences_by_corpus,
         "evidence_bundle_sha256": bundle_digest,
     }

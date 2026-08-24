@@ -690,6 +690,7 @@ class ScorerContractTest(unittest.TestCase):
                 self.assertEqual(summary["count"], 2)
                 self.assertEqual(summary["behavior_passes"], 2)
                 self.assertEqual(summary["safety_passes"], 2)
+        self.assertEqual(report["trust"], "untrusted_legacy")
 
     def test_incomplete_schedule_matrix_is_rejected(self):
         scorer = self.load_scorer()
@@ -991,7 +992,15 @@ class ScorerV2ContractTest(unittest.TestCase):
     load_scorer = ScorerContractTest.load_scorer
     write_jsonl = ScorerContractTest.write_jsonl
 
-    def v2_bundle(self, scorer, directory, *, holdout=True, result_label="pilot"):
+    def v2_bundle(
+        self,
+        scorer,
+        directory,
+        *,
+        holdout=True,
+        result_label="pilot",
+        repetitions=1,
+    ):
         prompts = [
             {
                 "case_id": "case-development",
@@ -1020,21 +1029,22 @@ class ScorerV2ContractTest(unittest.TestCase):
             for row in prompts
         ]
         schedule = []
-        for case_index, prompt in enumerate(prompts):
-            corpus = "holdout" if holdout and case_index == 1 else "development"
-            for condition_index, condition in enumerate(
-                ("no-skill", "comparator", "explicit", "implicit")
-            ):
-                schedule.append(
-                    {
-                        "run_id": f"run-{case_index}-{condition_index}",
-                        "case_id": prompt["case_id"],
-                        "condition": condition,
-                        "corpus": corpus,
-                        "repetition": 1,
-                        "seed": None,
-                    }
-                )
+        for repetition in range(1, repetitions + 1):
+            for case_index, prompt in enumerate(prompts):
+                corpus = "holdout" if holdout and case_index == 1 else "development"
+                for condition_index, condition in enumerate(
+                    ("no-skill", "comparator", "explicit", "implicit")
+                ):
+                    schedule.append(
+                        {
+                            "run_id": f"run-{repetition}-{case_index}-{condition_index}",
+                            "case_id": prompt["case_id"],
+                            "condition": condition,
+                            "corpus": corpus,
+                            "repetition": repetition,
+                            "seed": None,
+                        }
+                    )
 
         paths = {
             "schedule": self.write_jsonl(directory, "schedule-v2.jsonl", schedule),
@@ -1059,7 +1069,7 @@ class ScorerV2ContractTest(unittest.TestCase):
                         "data": {"text": f"finished {scheduled['run_id']}"},
                     }
                 ],
-                "readbacks": {},
+                "readbacks": {"$git": {"status": "", "diff": ""}},
             }
             outputs.append(output)
             evidence_digest = scorer.evidence_sha256(output)
@@ -1103,7 +1113,28 @@ class ScorerV2ContractTest(unittest.TestCase):
                 "build": "build-1",
             },
             "model": {"name": "test-model", "snapshot": "snapshot-1"},
-            "settings": {},
+            "settings": {
+                "environment_snapshot_sha256": "f" * 64,
+                "tool_permissions": {
+                    "profile": "synthetic-write",
+                    "filesystem_scope": "workspace-only",
+                    "network_policy": "deny-by-default",
+                    "external_side_effect_policy": "synthetic-only",
+                },
+                "isolation": {
+                    "profile": "sandbox-v1",
+                    "mechanism": "ephemeral-container",
+                    "filesystem_isolated": True,
+                    "credentials_isolated": True,
+                    "process_tree_cleanup": True,
+                    "attested_by": "evaluation-operator",
+                },
+                "blinded_judging": {
+                    "packet_builder_sha256": "1" * 64,
+                    "condition_labels_excluded": True,
+                    "model_identity_excluded": True,
+                },
+            },
             "skill": {
                 "sha256": "a" * 64,
                 "discovery_path": ".agents/skills/no-reask",
@@ -1131,10 +1162,10 @@ class ScorerV2ContractTest(unittest.TestCase):
                 ).hexdigest(),
             },
             "analysis": {
-                "repetitions": 1,
+                "repetitions": repetitions,
                 "confidence_level": 0.95,
                 "task_noninferiority_margin": 0.05,
-                "bootstrap_samples": 200,
+                "bootstrap_samples": 10000 if result_label == "formal" else 200,
             },
         }
         paths["manifest"] = directory / "manifest-v2.json"
@@ -1178,6 +1209,33 @@ class ScorerV2ContractTest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def set_case_readback(self, scorer, bundle, case_id, record):
+        oracle = next(row for row in bundle["oracles"] if row["case_id"] == case_id)
+        oracle["readback_paths"] = ["result.txt"]
+        for output in bundle["outputs"]:
+            if output["case_id"] == case_id:
+                output["readbacks"]["result.txt"] = dict(record)
+        self.rewrite_rows(bundle["paths"]["oracle"], bundle["oracles"])
+        self.rewrite_rows(bundle["paths"]["outputs"], bundle["outputs"])
+        bundle["manifest"]["files"]["oracle_sha256"] = hashlib.sha256(
+            bundle["paths"]["oracle"].read_bytes()
+        ).hexdigest()
+        bundle["paths"]["manifest"].write_text(
+            json.dumps(bundle["manifest"], sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        outputs_by_run = {row["run_id"]: row for row in bundle["outputs"]}
+        prompts_by_case = {row["case_id"]: row for row in bundle["prompts"]}
+        oracles_by_case = {row["case_id"]: row for row in bundle["oracles"]}
+        for judgment in bundle["judgments"]:
+            output = outputs_by_run[judgment["run_id"]]
+            judgment["evidence_sha256"] = scorer.evidence_sha256(output)
+            judgment["case_sha256"] = scorer.case_sha256(
+                prompts_by_case[output["case_id"]],
+                oracles_by_case[output["case_id"]],
+            )
+        self.rewrite_rows(bundle["paths"]["judgments"], bundle["judgments"])
+
     def test_v2_reports_component_joint_corpus_and_routing_counts(self):
         scorer = self.load_scorer()
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1197,6 +1255,10 @@ class ScorerV2ContractTest(unittest.TestCase):
         self.assertEqual(implicit["joint_passes"], 2)
         self.assertEqual(report["routing"]["unobserved"], 0)
         self.assertEqual(report["routing"]["true_positive"], 4)
+        self.assertEqual(
+            set(report["paired_differences_by_corpus"]),
+            {"development", "holdout"},
+        )
 
     def test_v2_missing_output_stays_in_denominator(self):
         scorer = self.load_scorer()
@@ -1243,6 +1305,58 @@ class ScorerV2ContractTest(unittest.TestCase):
             self.rewrite_rows(bundle["paths"]["judgments"], bundle["judgments"])
             with self.assertRaisesRegex(scorer.EvidenceError, r"(?i)evidence.*hash"):
                 self.score_v2(scorer, bundle)
+
+    def test_v2_rejects_missing_trusted_readback_surfaces(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            output = bundle["outputs"][0]
+            output["readbacks"].pop("$git")
+            rebound_digest = scorer.evidence_sha256(output)
+            for judgment in bundle["judgments"]:
+                if judgment["run_id"] == output["run_id"]:
+                    judgment["evidence_sha256"] = rebound_digest
+            self.rewrite_rows(bundle["paths"]["outputs"], bundle["outputs"])
+            self.rewrite_rows(bundle["paths"]["judgments"], bundle["judgments"])
+
+            with self.assertRaisesRegex(scorer.EvidenceError, r"(?i)readback"):
+                self.score_v2(scorer, bundle)
+
+    def test_v2_validates_raw_utf8_readback_hash_end_to_end(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            payload = "abc\n".encode("utf-8")
+            self.set_case_readback(
+                scorer,
+                bundle,
+                "case-development",
+                {
+                    "exists": True,
+                    "size": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "type": "text",
+                    "text": payload.decode("utf-8"),
+                },
+            )
+            report = self.score_v2(scorer, bundle)
+
+        self.assertEqual(report["per_condition"]["implicit"]["task_passes"], 2)
+
+    def test_v2_missing_required_readback_fails_task_outcome(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            self.set_case_readback(
+                scorer,
+                bundle,
+                "case-development",
+                {"exists": False},
+            )
+            report = self.score_v2(scorer, bundle)
+
+        for condition in ("no-skill", "comparator", "explicit", "implicit"):
+            self.assertEqual(report["per_condition"][condition]["task_passes"], 1)
 
     def test_v2_requires_adjudication_for_disagreement(self):
         scorer = self.load_scorer()
@@ -1296,6 +1410,179 @@ class ScorerV2ContractTest(unittest.TestCase):
         self.assertEqual(report["claim_status"], "formal_ineligible")
         self.assertIn("missing_holdout", report["claim_reasons"])
         self.assertIn("insufficient_repetitions", report["claim_reasons"])
+
+    def test_v2_formal_claim_requires_development_corpus(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(
+                scorer,
+                Path(temporary_directory),
+                result_label="formal",
+                repetitions=20,
+            )
+            for row in bundle["schedule"]:
+                row["corpus"] = "holdout"
+            self.rewrite_rows(bundle["paths"]["schedule"], bundle["schedule"])
+            bundle["manifest"]["files"]["schedule_sha256"] = hashlib.sha256(
+                bundle["paths"]["schedule"].read_bytes()
+            ).hexdigest()
+            bundle["paths"]["manifest"].write_text(
+                json.dumps(bundle["manifest"], sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            report = self.score_v2(scorer, bundle)
+
+        self.assertEqual(report["claim_status"], "formal_ineligible")
+        self.assertIn("missing_development", report["claim_reasons"])
+
+    def test_v2_formal_claim_requires_isolation_and_blinding_attestations(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(
+                scorer,
+                Path(temporary_directory),
+                result_label="formal",
+                repetitions=20,
+            )
+            bundle["manifest"]["settings"].pop("isolation")
+            bundle["manifest"]["settings"].pop("blinded_judging")
+            bundle["paths"]["manifest"].write_text(
+                json.dumps(bundle["manifest"], sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            report = self.score_v2(scorer, bundle)
+
+        self.assertIn("isolation_not_attested", report["claim_reasons"])
+        self.assertIn("blinded_judging_not_attested", report["claim_reasons"])
+
+    def test_v2_manifest_repetitions_must_match_schedule(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            bundle["manifest"]["analysis"]["repetitions"] = 2
+            bundle["paths"]["manifest"].write_text(
+                json.dumps(bundle["manifest"], sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(scorer.EvidenceError, r"(?i)repetitions"):
+                self.score_v2(scorer, bundle)
+
+    def test_v2_manifest_confidence_level_matches_fixed_95_percent_intervals(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            bundle["manifest"]["analysis"]["confidence_level"] = 0.9
+            bundle["paths"]["manifest"].write_text(
+                json.dumps(bundle["manifest"], sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(scorer.EvidenceError, r"(?i)confidence"):
+                self.score_v2(scorer, bundle)
+
+    def test_v2_formal_manifest_requires_10000_bootstrap_samples(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(
+                scorer,
+                Path(temporary_directory),
+                result_label="formal",
+            )
+            bundle["manifest"]["analysis"]["bootstrap_samples"] = 9999
+            bundle["paths"]["manifest"].write_text(
+                json.dumps(bundle["manifest"], sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(scorer.EvidenceError, r"(?i)bootstrap"):
+                self.score_v2(scorer, bundle)
+
+    def test_v2_rejects_frozen_case_omitted_from_schedule(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            kept_run_ids = {
+                row["run_id"]
+                for row in bundle["schedule"]
+                if row["case_id"] == "case-development"
+            }
+            bundle["schedule"] = [
+                row for row in bundle["schedule"] if row["run_id"] in kept_run_ids
+            ]
+            bundle["outputs"] = [
+                row for row in bundle["outputs"] if row["run_id"] in kept_run_ids
+            ]
+            bundle["judgments"] = [
+                row for row in bundle["judgments"] if row["run_id"] in kept_run_ids
+            ]
+            bundle["routing"] = [
+                row for row in bundle["routing"] if row["run_id"] in kept_run_ids
+            ]
+            for name in ("schedule", "outputs", "judgments", "routing"):
+                self.rewrite_rows(bundle["paths"][name], bundle[name])
+            bundle["manifest"]["run_ids"] = [
+                row["run_id"] for row in bundle["schedule"]
+            ]
+            bundle["manifest"]["files"]["schedule_sha256"] = hashlib.sha256(
+                bundle["paths"]["schedule"].read_bytes()
+            ).hexdigest()
+            bundle["paths"]["manifest"].write_text(
+                json.dumps(bundle["manifest"], sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(scorer.EvidenceError, r"(?i)case"):
+                self.score_v2(scorer, bundle)
+
+    def test_v2_formal_claim_enforces_statistical_release_gates(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(
+                scorer,
+                Path(temporary_directory),
+                result_label="formal",
+                repetitions=20,
+            )
+            report = self.score_v2(scorer, bundle)
+
+        self.assertEqual(report["claim_status"], "formal_ineligible")
+        self.assertIn("continuity_not_superior_to_no_skill", report["claim_reasons"])
+        self.assertIn("continuity_not_superior_to_comparator", report["claim_reasons"])
+
+    def test_v2_formal_claim_does_not_pool_development_and_holdout_gates(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(
+                scorer,
+                Path(temporary_directory),
+                result_label="formal",
+                repetitions=20,
+            )
+            schedule_by_run = {
+                row["run_id"]: row for row in bundle["schedule"]
+            }
+            for judgment in bundle["judgments"]:
+                scheduled = schedule_by_run[judgment["run_id"]]
+                if (
+                    scheduled["corpus"] == "development"
+                    and scheduled["condition"] in {"no-skill", "comparator"}
+                ):
+                    judgment["continuity_pass"] = False
+            self.rewrite_rows(bundle["paths"]["judgments"], bundle["judgments"])
+            report = self.score_v2(scorer, bundle)
+
+        development = report["paired_differences_by_corpus"]["development"]
+        holdout = report["paired_differences_by_corpus"]["holdout"]
+        self.assertEqual(
+            development["implicit_vs_no-skill"]["continuity_pass"]["lower_95"],
+            1.0,
+        )
+        self.assertEqual(
+            holdout["implicit_vs_no-skill"]["continuity_pass"]["lower_95"],
+            0.0,
+        )
+        self.assertEqual(report["claim_status"], "formal_ineligible")
 
     def test_v2_evidence_bundle_digest_is_deterministic(self):
         scorer = self.load_scorer()

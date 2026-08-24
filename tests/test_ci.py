@@ -320,12 +320,31 @@ class ModelSmokeWorkflowContractTest(unittest.TestCase):
         document = self.read_workflow()
         self.assertIn("python3 -I evals/run_smoke.py", document)
         self.assertIn("--adapter /opt/no-reask/bin/producer-adapter", document)
-        self.assertIn("actions/upload-artifact@v6", document)
+        self.assertIn("--environment-snapshot /opt/no-reask/eval-environment.json", document)
+        self.assertNotIn("configured-by-adapter", document)
         self.assertNotIn("${{ inputs.", document)
         lowered = document.lower()
         for forbidden in ("openai_api_key", "anthropic_api_key", "api-key"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, lowered)
+
+    def test_smoke_workflow_restricts_ref_credentials_and_environment(self):
+        document = self.read_workflow()
+        self.assertIn(
+            "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
+            document,
+        )
+        self.assertIn("environment: no-reask-evaluation", document)
+        self.assertIn("ref: ${{ github.sha }}", document)
+        self.assertIn("persist-credentials: false", document)
+        self.assertIn(
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            document,
+        )
+        self.assertIn(
+            "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+            document,
+        )
 
 
 if __name__ == "__main__":
