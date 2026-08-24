@@ -307,6 +307,94 @@ class EvaluationFixtureContractTest(unittest.TestCase):
                 self.assertIn(text, protocol)
 
 
+class EvidencePrimitiveTest(unittest.TestCase):
+    def load_evidence_module(self):
+        path = EVALS / "evidence.py"
+        self.assertTrue(path.is_file(), "evals/evidence.py must exist")
+        spec = importlib.util.spec_from_file_location("evaluation_evidence", path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_public_constants_define_conditions_and_outcomes(self):
+        evidence = self.load_evidence_module()
+        self.assertEqual(
+            evidence.CONDITIONS,
+            ("no-skill", "comparator", "explicit", "implicit"),
+        )
+        self.assertEqual(
+            evidence.OUTCOMES,
+            ("continuity_pass", "task_pass", "boundary_pass"),
+        )
+
+    def test_canonical_sha256_is_key_order_independent(self):
+        evidence = self.load_evidence_module()
+        self.assertEqual(
+            evidence.canonical_sha256({"b": 2, "a": 1}),
+            evidence.canonical_sha256({"a": 1, "b": 2}),
+        )
+
+    def test_canonical_sha256_rejects_non_utf8_text(self):
+        evidence = self.load_evidence_module()
+        with self.assertRaisesRegex(evidence.EvidenceError, r"(?i)(UTF-8|encode)"):
+            evidence.canonical_sha256({"text": "\ud800"})
+
+    def test_read_json_rejects_duplicate_members(self):
+        evidence = self.load_evidence_module()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "duplicate.json"
+            path.write_text('{"a":1,"a":2}\n', encoding="utf-8")
+            with self.assertRaisesRegex(evidence.EvidenceError, r"(?i)duplicate"):
+                evidence.read_json(path, "manifest")
+
+    def test_read_jsonl_rejects_blank_lines(self):
+        evidence = self.load_evidence_module()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "rows.jsonl"
+            path.write_text('{"a":1}\n\n', encoding="utf-8")
+            with self.assertRaisesRegex(evidence.EvidenceError, r"(?i)blank"):
+                evidence.read_jsonl(path, "rows")
+
+    def test_read_jsonl_allows_an_empty_file_only_when_requested(self):
+        evidence = self.load_evidence_module()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "rows.jsonl"
+            path.write_text("", encoding="utf-8")
+            with self.assertRaisesRegex(evidence.EvidenceError, r"(?i)empty"):
+                evidence.read_jsonl(path, "rows")
+            self.assertEqual(
+                evidence.read_jsonl(path, "rows", allow_empty=True), []
+            )
+
+    def test_require_exact_fields_reports_missing_and_extra_fields(self):
+        evidence = self.load_evidence_module()
+        with self.assertRaisesRegex(
+            evidence.EvidenceError, r"(?i)(missing.*b|unexpected.*c)"
+        ):
+            evidence.require_exact_fields({"a": 1, "c": 3}, {"a", "b"}, "row")
+
+    def test_file_sha256_hashes_raw_bytes(self):
+        evidence = self.load_evidence_module()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "payload.bin"
+            payload = b"No Re-Ask\x00\xff"
+            path.write_bytes(payload)
+            self.assertEqual(
+                evidence.file_sha256(path), hashlib.sha256(payload).hexdigest()
+            )
+
+    def test_require_sha256_accepts_only_lowercase_hex(self):
+        evidence = self.load_evidence_module()
+        digest = "a" * 64
+        self.assertEqual(evidence.require_sha256(digest, "digest"), digest)
+        for invalid in ("A" * 64, "a" * 63, "g" * 64, 42):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(evidence.EvidenceError, r"(?i)sha-?256"):
+                    evidence.require_sha256(invalid, "digest")
+
+
 class ScorerContractTest(unittest.TestCase):
     def load_scorer(self):
         path = EVALS / "score_eval.py"
