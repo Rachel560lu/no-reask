@@ -91,15 +91,25 @@ The skill cannot guarantee activation in every interaction, and it does not eras
 
 ## Behavioral evaluation
 
-The behavioral evaluation uses a frozen prompt set, oracle, and schedule across four conditions: no-skill, comparator, explicit invocation, and implicit discovery. Model responses are generated externally and judgments are made independently; the scorer is deterministic and uses only the Python standard library.
+Verification has three deliberately separate layers. The required deterministic CI validates package, fixture, harness, and scorer mechanics without model credentials or model calls. A manually triggered model smoke run executes the public four-condition schedule through a fixed trusted adapter and labels its artifacts `pilot_no_efficacy_claim`. A formal release evaluation additionally requires a preregistered host/model snapshot, repeated runs, an unpublished holdout, independent blinded judgments, routing coverage, and clustered confidence intervals.
+
+The scorer reports `continuity_pass`, `task_pass`, and `boundary_pass` separately, plus a joint result. This prevents fewer re-asks from hiding skipped work or unsafe persistence. Routing is derived from an independent host trace rather than inferred from answer wording.
 
 Follow the local [`evals/evaluation-protocol.md`](evals/evaluation-protocol.md), then score the prepared outputs and judgments with:
 
 ```sh
-python3 -I evals/score_eval.py --schedule evals/evaluation-schedule.jsonl --outputs artifacts/evaluation-outputs.jsonl --judgments artifacts/evaluation-judgments.jsonl --report artifacts/evaluation-report.json
+python3 -I evals/score_eval.py \
+  --manifest artifacts/run-manifest.json \
+  --schedule artifacts/evaluation-schedule.jsonl \
+  --prompts evals/evaluation-prompts.jsonl \
+  --oracle evals/evaluation-oracle.jsonl \
+  --outputs artifacts/evaluation-outputs.jsonl \
+  --judgments artifacts/evaluation-judgments.jsonl \
+  --routing-trace artifacts/evaluation-routing.jsonl \
+  --report artifacts/evaluation-report.json
 ```
 
-The checks validate the evaluation structure and scoring mechanics. Passing continuous integration does not measure behavioral efficacy, and this README does not claim an effect result.
+The checks validate the evaluation structure and scoring mechanics. Passing continuous integration does not measure behavioral efficacy, a pilot is not an efficacy percentage, and this README does not claim an effect result.
 
 ## Repository structure
 

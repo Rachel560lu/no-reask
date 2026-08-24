@@ -91,15 +91,25 @@ No Re-Ask 是一项行为技能，也是一种提示词层面的缓解措施。�
 
 ## 行为评测
 
-行为评测在以下四种条件下进行：无技能、对照项、显式调用和隐式发现。评测使用冻结的提示集、判定准则和调度表。模型响应由外部生成，判定工作独立进行；评分器具有确定性，并且只使用 Python 标准库。
+验证被明确分成三层。每次提交运行的确定性 CI 只验证技能包、fixture、harness 和评分器机制，不接收模型凭证，也不调用模型。手动触发的模型冒烟评测通过固定的可信 adapter 执行公开的四条件调度，并将产物标记为 `pilot_no_efficacy_claim`。正式发布评测还必须预注册 host 和模型快照，进行重复运行，使用未公开 holdout、独立盲审、routing 覆盖率和按提示聚类的置信区间。
+
+评分器分别报告 `continuity_pass`、`task_pass` 和 `boundary_pass`，并另外报告三者同时通过的联合结果。这样，减少重复询问就不能掩盖漏做任务或不安全的持续执行。Routing 只能来自独立 host trace，不能从答案措辞反推。
 
 请先遵循本地的 [`evals/evaluation-protocol.md`](evals/evaluation-protocol.md)，再使用以下命令对准备好的输出和判定结果评分：
 
 ```sh
-python3 -I evals/score_eval.py --schedule evals/evaluation-schedule.jsonl --outputs artifacts/evaluation-outputs.jsonl --judgments artifacts/evaluation-judgments.jsonl --report artifacts/evaluation-report.json
+python3 -I evals/score_eval.py \
+  --manifest artifacts/run-manifest.json \
+  --schedule artifacts/evaluation-schedule.jsonl \
+  --prompts evals/evaluation-prompts.jsonl \
+  --oracle evals/evaluation-oracle.jsonl \
+  --outputs artifacts/evaluation-outputs.jsonl \
+  --judgments artifacts/evaluation-judgments.jsonl \
+  --routing-trace artifacts/evaluation-routing.jsonl \
+  --report artifacts/evaluation-report.json
 ```
 
-这些检查验证评测结构和评分机制。持续集成通过不能衡量行为效果，本文档也未声称该技能已被证明有效。
+这些检查验证评测结构和评分机制。持续集成通过不能衡量行为效果，pilot 也不是有效率百分比；本文档并未声称该技能已被证明有效。
 
 ## 仓库结构
 

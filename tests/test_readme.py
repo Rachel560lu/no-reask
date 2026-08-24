@@ -87,17 +87,43 @@ else
   mkdir -p ~/.codex/skills
   ln -s "$(pwd)/no-reask" "$skill_target"
 fi'''
-SCORER_COMMAND = (
-    "python3 -I evals/score_eval.py "
-    "--schedule evals/evaluation-schedule.jsonl "
-    "--outputs artifacts/evaluation-outputs.jsonl "
-    "--judgments artifacts/evaluation-judgments.jsonl "
-    "--report artifacts/evaluation-report.json"
+SCORER_COMMAND = "\n".join(
+    (
+        "python3 -I evals/score_eval.py \\",
+        "  --manifest artifacts/run-manifest.json \\",
+        "  --schedule artifacts/evaluation-schedule.jsonl \\",
+        "  --prompts evals/evaluation-prompts.jsonl \\",
+        "  --oracle evals/evaluation-oracle.jsonl \\",
+        "  --outputs artifacts/evaluation-outputs.jsonl \\",
+        "  --judgments artifacts/evaluation-judgments.jsonl \\",
+        "  --routing-trace artifacts/evaluation-routing.jsonl \\",
+        "  --report artifacts/evaluation-report.json",
+    )
 )
 BOUNDARY_PHRASES = {
     "English": ("material clarification", "does not expand authorization",
                 "does not measure behavioral efficacy"),
     "Chinese": ("实质性澄清", "不会扩大授权", "不能衡量行为效果"),
+}
+EVALUATION_LAYER_PHRASES = {
+    "English": (
+        "deterministic CI",
+        "model smoke",
+        "formal release evaluation",
+        "continuity_pass",
+        "task_pass",
+        "boundary_pass",
+        "pilot_no_efficacy_claim",
+    ),
+    "Chinese": (
+        "确定性 CI",
+        "模型冒烟",
+        "正式发布评测",
+        "continuity_pass",
+        "task_pass",
+        "boundary_pass",
+        "pilot_no_efficacy_claim",
+    ),
 }
 
 
@@ -270,6 +296,15 @@ class ReadmeContractTest(unittest.TestCase):
                 document = self.read_required(label)
                 missing = [phrase for phrase in phrases if phrase not in document]
                 self.assertEqual(missing, [], f"{label} README is missing boundary text")
+
+    def test_both_readmes_explain_the_three_evaluation_layers(self):
+        for label, phrases in EVALUATION_LAYER_PHRASES.items():
+            with self.subTest(language=label):
+                document = self.read_required(label)
+                missing = [phrase for phrase in phrases if phrase not in document]
+                self.assertEqual(
+                    missing, [], f"{label} README is missing evaluation layer text"
+                )
 
     def test_both_readmes_use_only_exact_approved_assets(self):
         for label in READMES:
