@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "test.yml"
+SMOKE_WORKFLOW = ROOT / ".github" / "workflows" / "model-smoke.yml"
 TEST_COMMAND = 'python -I -m unittest discover -s tests -p "test_*.py" -v'
 
 
@@ -297,6 +298,34 @@ class ContinuousIntegrationContractTest(unittest.TestCase):
         for forbidden in ("openai_api_key", "anthropic_api_key", "run_smoke.py"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, document)
+
+
+class ModelSmokeWorkflowContractTest(unittest.TestCase):
+    def read_workflow(self):
+        self.assertTrue(
+            SMOKE_WORKFLOW.is_file(), ".github/workflows/model-smoke.yml must exist"
+        )
+        return SMOKE_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_smoke_workflow_is_manual_read_only_and_self_hosted(self):
+        document = self.read_workflow()
+        self.assertIn("workflow_dispatch:", document)
+        self.assertNotIn("pull_request:", document)
+        self.assertNotIn("push:", document)
+        self.assertIn("contents: read", document)
+        self.assertIn("runs-on: [self-hosted, no-reask-eval]", document)
+        self.assertIn("timeout-minutes: 30", document)
+
+    def test_smoke_workflow_uses_a_fixed_adapter_without_model_secrets(self):
+        document = self.read_workflow()
+        self.assertIn("python3 -I evals/run_smoke.py", document)
+        self.assertIn("--adapter /opt/no-reask/bin/producer-adapter", document)
+        self.assertIn("actions/upload-artifact@v6", document)
+        self.assertNotIn("${{ inputs.", document)
+        lowered = document.lower()
+        for forbidden in ("openai_api_key", "anthropic_api_key", "api-key"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, lowered)
 
 
 if __name__ == "__main__":
