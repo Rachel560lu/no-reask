@@ -11,11 +11,13 @@ READMES = {
 }
 EXPECTED_HEADINGS = {
     "English": (
-        "The problem|How it works|Use cases|Installation|Usage|Decision boundary|"
-        "Boundaries|Behavioral evaluation|Repository structure|Development|Feedback"
+        "The problem|How it works|Use cases|No Re-Ask and Goal|Installation|Usage|"
+        "Decision boundary|Boundaries|Behavioral evaluation|Repository structure|"
+        "Development|Feedback"
     ).split("|"),
     "Chinese": (
-        "它解决什么问题|如何工作|适用场景|安装|使用|判断边界|能力边界|行为评测|仓库结构|开发验证|反馈"
+        "它解决什么问题|如何工作|适用场景|No Re-Ask 与 Goal|安装|使用|判断边界|"
+        "能力边界|行为评测|仓库结构|开发验证|反馈"
     ).split("|"),
 }
 TEST_WORKFLOW_URL = "https://github.com/Rachel560lu/no-reask/actions/workflows/test.yml"
@@ -26,8 +28,9 @@ PYTHON_BADGE_URL = (
 )
 TEST_IMG = f'<img src="{TEST_BADGE_URL}" alt="Tests">'
 PYTHON_IMG = f'<img src="{PYTHON_BADGE_URL}" alt="Python 3.10+">'
+ICON_IMG = '<img src="./no-reask/assets/icon.svg" width="96" alt="No Re-Ask icon">'
 TEST_LINK = f'<a href="{TEST_WORKFLOW_URL}">{TEST_IMG}</a>'
-APPROVED_IMAGES = (TEST_IMG, PYTHON_IMG)
+APPROVED_IMAGES = (ICON_IMG, TEST_IMG, PYTHON_IMG)
 ASSET_OPENERS = ("<img", "<picture", "<source", "![")
 BADGE_BLOCK = [
     '<p align="center">',
@@ -37,19 +40,16 @@ BADGE_BLOCK = [
 ]
 HERO_COPY = {
     "English": (
-        (
-            '<p align="center"><strong>Finish authorized work without asking '
-            "again.</strong></p>"
-        ),
-        '<p align="center"><em>If the user already asked for it, do it.</em></p>',
+        '<p align="center"><strong>You already asked. Let the work continue.</strong></p>',
+        '<p align="center"><em>Finish authorized work without asking again.</em></p>',
         (
             '<p align="center"><strong>English</strong> · '
             '<a href="./README.zh-CN.md">中文</a></p>'
         ),
     ),
     "Chinese": (
-        '<p align="center"><strong>完成已获授权的工作，不要再次询问。</strong></p>',
-        '<p align="center"><em>用户已经要求的事，直接完成。</em></p>',
+        '<p align="center"><strong>用户已经说过了。继续做。</strong></p>',
+        '<p align="center"><em>完成已获授权的工作，不要再次询问。</em></p>',
         (
             '<p align="center"><a href="./README.md">English</a> · '
             "<strong>中文</strong></p>"
@@ -57,7 +57,14 @@ HERO_COPY = {
     ),
 }
 HERO_LINES = {
-    label: ['<h1 align="center">No Re-Ask</h1>', *copy, *BADGE_BLOCK]
+    label: [
+        '<p align="center">',
+        f"  {ICON_IMG}",
+        "</p>",
+        '<h1 align="center">No Re-Ask</h1>',
+        *copy,
+        *BADGE_BLOCK,
+    ]
     for label, copy in HERO_COPY.items()
 }
 OPERATIONAL_STRINGS = (
@@ -66,17 +73,21 @@ OPERATIONAL_STRINGS = (
     "python3 -I -m unittest discover -s tests -p 'test_*.py' -v",
     "no-reask/SKILL.md",
     "no-reask/agents/openai.yaml",
+    "no-reask/assets/icon.svg",
 )
+GOAL_DOCS_URL = "https://learn.chatgpt.com/use-cases/follow-goals"
 APPROVED_LINK_DESTINATIONS = {
     "English": {
         "./README.zh-CN.md",
         "evals/evaluation-protocol.md",
         TEST_WORKFLOW_URL,
+        GOAL_DOCS_URL,
     },
     "Chinese": {
         "./README.md",
         "evals/evaluation-protocol.md",
         TEST_WORKFLOW_URL,
+        GOAL_DOCS_URL,
     },
 }
 INSTALL_BLOCK = r'''skill_target="${HOME}/.codex/skills/no-reask"
@@ -98,6 +109,22 @@ BOUNDARY_PHRASES = {
     "English": ("material clarification", "does not expand authorization",
                 "does not measure behavioral efficacy"),
     "Chinese": ("实质性澄清", "不会扩大授权", "不能衡量行为效果"),
+}
+POSITIONING_PHRASES = {
+    "English": (
+        "This skill started with a message that should not exist",
+        "Would you like me to continue?",
+        "Revalidation passed.",
+        "Goal tells the elevator which floor to reach.",
+        "No Re-Ask keeps it from stopping at every floor to ask",
+    ),
+    "Chinese": (
+        "这个 Skill 的起点，是一条不该存在的消息",
+        "你希望我继续吗？",
+        "重新验证通过。",
+        "Goal 告诉电梯去几楼。",
+        "No Re-Ask 防止它每到一层都问",
+    ),
 }
 
 
@@ -174,7 +201,7 @@ class ReadmeContractTest(unittest.TestCase):
         return document
 
     def test_exact_asset_allowlist_rejects_nonexact_forms(self):
-        valid = f"{TEST_LINK}\n{PYTHON_IMG}"
+        valid = f"{ICON_IMG}\n{TEST_LINK}\n{PYTHON_IMG}"
         variants = {
             "alternate HTML": f'<img alt="Tests" src="{TEST_BADGE_URL}">',
             "Markdown": "![Diagram](diagram.svg)",
@@ -270,6 +297,13 @@ class ReadmeContractTest(unittest.TestCase):
                 document = self.read_required(label)
                 missing = [phrase for phrase in phrases if phrase not in document]
                 self.assertEqual(missing, [], f"{label} README is missing boundary text")
+
+    def test_both_readmes_state_the_human_example_and_goal_distinction(self):
+        for label, phrases in POSITIONING_PHRASES.items():
+            with self.subTest(language=label):
+                document = self.read_required(label)
+                missing = [phrase for phrase in phrases if phrase not in document]
+                self.assertEqual(missing, [], f"{label} README is missing positioning text")
 
     def test_both_readmes_use_only_exact_approved_assets(self):
         for label in READMES:

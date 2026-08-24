@@ -119,7 +119,7 @@ class PackageContractTest(unittest.TestCase):
         self.assertIsNotNone(default_prompt)
         self.assertIn("$no-reask", default_prompt)
 
-    def test_installable_runtime_contains_only_skill_and_agent_metadata(self):
+    def test_installable_runtime_contains_only_declared_runtime_files(self):
         runtime = ROOT / "no-reask"
         self.assertTrue(runtime.is_dir(), "no-reask/ must exist")
         entries = set()
@@ -131,7 +131,15 @@ class PackageContractTest(unittest.TestCase):
                 relative_path += "/"
             entries.add(relative_path)
         self.assertEqual(
-            entries, {"SKILL.md", "agents/", "agents/openai.yaml"}
+            entries,
+            {
+                "SKILL.md",
+                "agents/",
+                "agents/openai.yaml",
+                "assets/",
+                "assets/icon-400.png",
+                "assets/icon.svg",
+            },
         )
 
 

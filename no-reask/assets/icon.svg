@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">No Re-Ask</title>
+  <desc id="desc">A completed task card</desc>
+  <rect x="33" y="28" width="94" height="104" rx="23" fill="#172B4D"/>
+  <path d="M54 82l17 17 35-40" fill="none" stroke="#FFFFFF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M54 113h43" fill="none" stroke="#B9D4E7" stroke-width="7" stroke-linecap="round"/>
+</svg>

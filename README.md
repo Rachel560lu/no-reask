@@ -1,6 +1,9 @@
+<p align="center">
+  <img src="./no-reask/assets/icon.svg" width="96" alt="No Re-Ask icon">
+</p>
 <h1 align="center">No Re-Ask</h1>
-<p align="center"><strong>Finish authorized work without asking again.</strong></p>
-<p align="center"><em>If the user already asked for it, do it.</em></p>
+<p align="center"><strong>You already asked. Let the work continue.</strong></p>
+<p align="center"><em>Finish authorized work without asking again.</em></p>
 <p align="center"><strong>English</strong> · <a href="./README.zh-CN.md">中文</a></p>
 
 <p align="center">
@@ -10,22 +13,28 @@
 
 ## The problem
 
-An agent can start explicit, multi-part work, pause after partial progress, a progress update, a turn boundary, or a long operation, and then offer the remaining authorized work as optional. That narrow failure mode repeats a permission question the user already answered and leaves feasible work unfinished.
+This skill started with a message that should not exist:
 
-For example:
+> Continue.
+
+You already said what to do. The agent understood, did part of it, and then handed the rest back as a new choice:
+
+> **You:** “Review this PR. If only formatting issues remain, fix them directly and revalidate.”
+>
+> **Agent:** “I found two formatting issues. The fix is straightforward.”
 
 ```diff
-- Parser implemented.
-- Would you like me to add the tests?
-+ Parser and tests implemented.
-+ Test suite: 54 tests passed.
+- I can fix them. Would you like me to continue?
++ Fixed two formatting issues. Revalidation passed.
 ```
 
-No Re-Ask is a behavior skill for carrying the user's original request through to a completed outcome without that unnecessary handoff.
+The agent did not lack understanding or authorization. It walked up to the elevator, saw that you had already pressed the button, and turned around to ask, “Still going up?”
+
+No Re-Ask removes that unnecessary turn. When work is already requested, still in scope, and feasible now, the agent continues and reports the result. When a real choice, authority, or safety fact is missing, it still asks.
 
 ## How it works
 
-The skill tracks requested deliverables until each is completed, materially blocked, or explicitly withdrawn by the user.
+The skill carries the authorization boundary of the current request forward until the requested work is completed, materially blocked, or explicitly withdrawn.
 
 - Continue feasible work that remains inside the authorized scope.
 - Report the completed outcome and concrete evidence, such as a fresh test result.
@@ -36,10 +45,25 @@ Partial progress, elapsed time, long-running work, context changes, and turn bou
 
 ## Use cases
 
-- Completing a coding request that names several deliverables, such as implementation, tests, validation, and a final report.
-- Waiting through a long test suite or operation, then continuing with the requested follow-up work and result.
-- Closing an explicit recommendation request with a clear recommendation and reasons.
-- Preserving completed work while asking one focused clarification when a genuinely missing target, authority, or safety fact blocks the next authorized action.
+- Applying an already-requested fix after diagnosis instead of asking for the same permission again.
+- Continuing after a progress update, long test run, tool call, or turn boundary.
+- Finishing an explicit review or recommendation instead of returning the final decision to the user.
+- Asking one focused question when a genuinely missing target, authority, or safety fact blocks the next action.
+
+## No Re-Ask and Goal
+
+**Goal tells the elevator which floor to reach. No Re-Ask keeps it from stopping at every floor to ask, “Still going?”**
+
+They solve different problems:
+
+| | Codex Goal | No Re-Ask |
+|---|---|---|
+| Question answered | What outcome must be reached? | Is this next step already authorized? |
+| What it keeps | A durable objective and stopping condition | The authorization boundary of the current request |
+| Best fit | Long-running work across turns with a validation loop | Redundant permission questions in ordinary work |
+| It does not | Supply missing authorization | Create a persistent execution loop |
+
+They can work together: Goal keeps the destination in view; No Re-Ask keeps the agent from needlessly stopping on the way. See the official [Codex Goal documentation](https://learn.chatgpt.com/use-cases/follow-goals) for its long-running, verifiable workflow.
 
 ## Installation
 
@@ -61,7 +85,7 @@ fi
 Invoke the skill explicitly in an important request:
 
 ```text
-$no-reask Implement the parser and tests, run the test suite, and report the results.
+$no-reask Review this PR. If only formatting issues remain, fix them directly and revalidate.
 ```
 
 It also applies to recommendation work:
@@ -103,10 +127,11 @@ The checks validate the evaluation structure and scoring mechanics. Passing cont
 
 ## Repository structure
 
-The installable runtime contains only:
+The installable runtime contains:
 
 - `no-reask/SKILL.md` — behavior instructions and the decision boundary.
 - `no-reask/agents/openai.yaml` — agent-facing display metadata and the default prompt.
+- `no-reask/assets/icon.svg` and `icon-400.png` — the project symbol in scalable and raster formats.
 
 Development evidence remains outside the installable runtime:
 
