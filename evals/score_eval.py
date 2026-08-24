@@ -45,6 +45,27 @@ class EvidenceError(ValueError):
     """Raised when evaluation evidence is incomplete or invalid."""
 
 
+_EVALS_DIRECTORY = str(Path(__file__).resolve().parent)
+if _EVALS_DIRECTORY not in sys.path:
+    sys.path.insert(0, _EVALS_DIRECTORY)
+
+from scorer_v2 import (  # noqa: E402
+    EvidenceError as _V2EvidenceError,
+    case_sha256,
+    evidence_sha256,
+    score_v2_evidence as _score_v2_evidence,
+)
+
+
+def score_v2_evidence(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Score schema-v2 evidence while preserving the public error type."""
+
+    try:
+        return _score_v2_evidence(*args, **kwargs)
+    except _V2EvidenceError as error:
+        raise EvidenceError(str(error)) from error
+
+
 def response_sha256(text: str) -> str:
     """Return the lowercase SHA-256 digest of a UTF-8 response."""
 
@@ -334,8 +355,12 @@ def _parser() -> argparse.ArgumentParser:
         description="Validate and score frozen behavioral evaluation evidence."
     )
     parser.add_argument("--schedule", required=True, help="schedule JSONL path")
+    parser.add_argument("--manifest", help="schema-v2 run manifest JSON path")
+    parser.add_argument("--prompts", help="schema-v2 prompts JSONL path")
+    parser.add_argument("--oracle", help="schema-v2 oracle JSONL path")
     parser.add_argument("--outputs", required=True, help="frozen outputs JSONL path")
     parser.add_argument("--judgments", required=True, help="judge records JSONL path")
+    parser.add_argument("--routing-trace", help="schema-v2 routing trace JSONL path")
     parser.add_argument(
         "--adjudications", help="adjudication records JSONL path, when required"
     )
@@ -385,13 +410,46 @@ def main(argv: Sequence[str] | None = None) -> int:
             ]
             if args.adjudications:
                 evidence_values.append(("--adjudications", args.adjudications))
+            for option, value in (
+                ("--manifest", args.manifest),
+                ("--prompts", args.prompts),
+                ("--oracle", args.oracle),
+                ("--routing-trace", args.routing_trace),
+            ):
+                if value:
+                    evidence_values.append((option, value))
             _validate_report_destination(args.report, evidence_values)
-        report = score_evidence(
-            args.schedule,
-            args.outputs,
-            args.judgments,
-            adjudications_path=args.adjudications,
-        )
+        if args.manifest:
+            missing = [
+                option
+                for option, value in (
+                    ("--prompts", args.prompts),
+                    ("--oracle", args.oracle),
+                    ("--routing-trace", args.routing_trace),
+                )
+                if not value
+            ]
+            if missing:
+                raise EvidenceError(
+                    f"schema-v2 scoring requires options: {', '.join(missing)}"
+                )
+            report = score_v2_evidence(
+                args.manifest,
+                args.schedule,
+                args.prompts,
+                args.oracle,
+                args.outputs,
+                args.judgments,
+                args.routing_trace,
+                adjudications_path=args.adjudications,
+            )
+        else:
+            report = score_evidence(
+                args.schedule,
+                args.outputs,
+                args.judgments,
+                adjudications_path=args.adjudications,
+            )
         serialized = json.dumps(report, indent=2, sort_keys=True) + "\n"
         if args.report:
             try:

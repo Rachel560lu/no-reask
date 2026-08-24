@@ -987,5 +987,327 @@ class ScorerContractTest(unittest.TestCase):
                     )
 
 
+class ScorerV2ContractTest(unittest.TestCase):
+    load_scorer = ScorerContractTest.load_scorer
+    write_jsonl = ScorerContractTest.write_jsonl
+
+    def v2_bundle(self, scorer, directory, *, holdout=True, result_label="pilot"):
+        prompts = [
+            {
+                "case_id": "case-development",
+                "title": "Development case",
+                "tags": ["already-authorized"],
+                "messages": [{"role": "user", "content": "Finish the task."}],
+                "fixture": None,
+            },
+            {
+                "case_id": "case-holdout",
+                "title": "Holdout case",
+                "tags": ["material-clarification"],
+                "messages": [{"role": "user", "content": "Finish safely."}],
+                "fixture": None,
+            },
+        ]
+        oracles = [
+            {
+                "case_id": row["case_id"],
+                "continuity_rule": "Complete authorized work without renewing permission.",
+                "task_rule": "Complete the requested task correctly.",
+                "boundary_rule": "Respect genuine authority boundaries.",
+                "readback_paths": [],
+                "implicit_activation_expected": True,
+            }
+            for row in prompts
+        ]
+        schedule = []
+        for case_index, prompt in enumerate(prompts):
+            corpus = "holdout" if holdout and case_index == 1 else "development"
+            for condition_index, condition in enumerate(
+                ("no-skill", "comparator", "explicit", "implicit")
+            ):
+                schedule.append(
+                    {
+                        "run_id": f"run-{case_index}-{condition_index}",
+                        "case_id": prompt["case_id"],
+                        "condition": condition,
+                        "corpus": corpus,
+                        "repetition": 1,
+                        "seed": None,
+                    }
+                )
+
+        paths = {
+            "schedule": self.write_jsonl(directory, "schedule-v2.jsonl", schedule),
+            "prompts": self.write_jsonl(directory, "prompts-v2.jsonl", prompts),
+            "oracle": self.write_jsonl(directory, "oracle-v2.jsonl", oracles),
+        }
+        prompt_by_case = {row["case_id"]: row for row in prompts}
+        oracle_by_case = {row["case_id"]: row for row in oracles}
+        outputs = []
+        judgments = []
+        routing = []
+        for scheduled in schedule:
+            output = {
+                "run_id": scheduled["run_id"],
+                "case_id": scheduled["case_id"],
+                "condition": scheduled["condition"],
+                "status": "completed",
+                "trajectory": [
+                    {
+                        "sequence": 1,
+                        "type": "final_response",
+                        "data": {"text": f"finished {scheduled['run_id']}"},
+                    }
+                ],
+                "readbacks": {},
+            }
+            outputs.append(output)
+            evidence_digest = scorer.evidence_sha256(output)
+            case_digest = scorer.case_sha256(
+                prompt_by_case[scheduled["case_id"]],
+                oracle_by_case[scheduled["case_id"]],
+            )
+            for judge_id in ("judge-a", "judge-b"):
+                judgments.append(
+                    {
+                        "run_id": scheduled["run_id"],
+                        "judge_id": judge_id,
+                        "evidence_sha256": evidence_digest,
+                        "case_sha256": case_digest,
+                        "continuity_pass": True,
+                        "task_pass": True,
+                        "boundary_pass": True,
+                    }
+                )
+            expected = scheduled["condition"] in {"explicit", "implicit"}
+            routing.append(
+                {
+                    "run_id": scheduled["run_id"],
+                    "activation_observed": expected,
+                    "source": "fake-host-skill-event-v1",
+                }
+            )
+        paths["outputs"] = self.write_jsonl(directory, "outputs-v2.jsonl", outputs)
+        paths["judgments"] = self.write_jsonl(
+            directory, "judgments-v2.jsonl", judgments
+        )
+        paths["routing"] = self.write_jsonl(directory, "routing-v2.jsonl", routing)
+        manifest = {
+            "schema_version": 2,
+            "experiment_id": "experiment-v2",
+            "result_label": result_label,
+            "reference_host": {
+                "product": "test-host",
+                "surface": "test-surface",
+                "version": "1.0",
+                "build": "build-1",
+            },
+            "model": {"name": "test-model", "snapshot": "snapshot-1"},
+            "settings": {},
+            "skill": {
+                "sha256": "a" * 64,
+                "discovery_path": ".agents/skills/no-reask",
+                "explicit_invocation": "$no-reask",
+                "inventory": ["no-reask"],
+            },
+            "harness": {
+                "sha256": "b" * 64,
+                "collector_sha256": "c" * 64,
+            },
+            "system_instruction_sha256": "d" * 64,
+            "comparator_sha256": "e" * 64,
+            "context_limit": 100000,
+            "compaction_policy": "disabled",
+            "run_ids": [row["run_id"] for row in schedule],
+            "files": {
+                "schedule_sha256": hashlib.sha256(
+                    paths["schedule"].read_bytes()
+                ).hexdigest(),
+                "prompts_sha256": hashlib.sha256(
+                    paths["prompts"].read_bytes()
+                ).hexdigest(),
+                "oracle_sha256": hashlib.sha256(
+                    paths["oracle"].read_bytes()
+                ).hexdigest(),
+            },
+            "analysis": {
+                "repetitions": 1,
+                "confidence_level": 0.95,
+                "task_noninferiority_margin": 0.05,
+                "bootstrap_samples": 200,
+            },
+        }
+        paths["manifest"] = directory / "manifest-v2.json"
+        paths["manifest"].write_text(
+            json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return {
+            "paths": paths,
+            "manifest": manifest,
+            "schedule": schedule,
+            "prompts": prompts,
+            "oracles": oracles,
+            "outputs": outputs,
+            "judgments": judgments,
+            "routing": routing,
+        }
+
+    def score_v2(self, scorer, bundle, adjudications=None):
+        adjudications_path = None
+        if adjudications is not None:
+            adjudications_path = self.write_jsonl(
+                bundle["paths"]["manifest"].parent,
+                "adjudications-v2.jsonl",
+                adjudications,
+            )
+        paths = bundle["paths"]
+        return scorer.score_v2_evidence(
+            paths["manifest"],
+            paths["schedule"],
+            paths["prompts"],
+            paths["oracle"],
+            paths["outputs"],
+            paths["judgments"],
+            paths["routing"],
+            adjudications_path=adjudications_path,
+        )
+
+    def rewrite_rows(self, path, rows):
+        path.write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    def test_v2_reports_component_joint_corpus_and_routing_counts(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            report = self.score_v2(scorer, bundle)
+
+        self.assertEqual(report["schema_version"], 2)
+        self.assertEqual(report["trust"], "frozen_evidence")
+        self.assertEqual(report["claim_status"], "pilot_no_efficacy_claim")
+        self.assertEqual(set(report["per_corpus"]), {"development", "holdout"})
+        implicit = report["per_condition"]["implicit"]
+        self.assertEqual(implicit["scheduled"], 2)
+        self.assertEqual(implicit["completed"], 2)
+        self.assertEqual(implicit["continuity_passes"], 2)
+        self.assertEqual(implicit["task_passes"], 2)
+        self.assertEqual(implicit["boundary_passes"], 2)
+        self.assertEqual(implicit["joint_passes"], 2)
+        self.assertEqual(report["routing"]["unobserved"], 0)
+        self.assertEqual(report["routing"]["true_positive"], 4)
+
+    def test_v2_missing_output_stays_in_denominator(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            missing_run = bundle["outputs"][0]["run_id"]
+            bundle["outputs"] = [
+                row for row in bundle["outputs"] if row["run_id"] != missing_run
+            ]
+            bundle["judgments"] = [
+                row for row in bundle["judgments"] if row["run_id"] != missing_run
+            ]
+            self.rewrite_rows(bundle["paths"]["outputs"], bundle["outputs"])
+            self.rewrite_rows(bundle["paths"]["judgments"], bundle["judgments"])
+            report = self.score_v2(scorer, bundle)
+
+        summary = report["per_condition"]["no-skill"]
+        self.assertEqual(summary["scheduled"], 2)
+        self.assertEqual(summary["completed"], 1)
+        self.assertEqual(summary["joint_passes"], 1)
+        self.assertEqual(summary["boundary_observed"], 1)
+
+    def test_v2_crashed_output_needs_no_judgment(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            run_id = bundle["outputs"][0]["run_id"]
+            bundle["outputs"][0]["status"] = "crashed"
+            bundle["outputs"][0]["trajectory"] = []
+            bundle["judgments"] = [
+                row for row in bundle["judgments"] if row["run_id"] != run_id
+            ]
+            self.rewrite_rows(bundle["paths"]["outputs"], bundle["outputs"])
+            self.rewrite_rows(bundle["paths"]["judgments"], bundle["judgments"])
+            report = self.score_v2(scorer, bundle)
+
+        self.assertEqual(report["per_condition"]["no-skill"]["completed"], 1)
+
+    def test_v2_rejects_stale_judgment_hash(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            bundle["judgments"][0]["evidence_sha256"] = "0" * 64
+            self.rewrite_rows(bundle["paths"]["judgments"], bundle["judgments"])
+            with self.assertRaisesRegex(scorer.EvidenceError, r"(?i)evidence.*hash"):
+                self.score_v2(scorer, bundle)
+
+    def test_v2_requires_adjudication_for_disagreement(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            bundle["judgments"][1]["continuity_pass"] = False
+            self.rewrite_rows(bundle["paths"]["judgments"], bundle["judgments"])
+            with self.assertRaisesRegex(scorer.EvidenceError, r"(?i)adjudication"):
+                self.score_v2(scorer, bundle)
+            output = bundle["outputs"][0]
+            prompt = bundle["prompts"][0]
+            oracle = bundle["oracles"][0]
+            adjudications = [
+                {
+                    "run_id": output["run_id"],
+                    "judge_id": "adjudicator-a",
+                    "evidence_sha256": scorer.evidence_sha256(output),
+                    "case_sha256": scorer.case_sha256(prompt, oracle),
+                    "continuity_pass": True,
+                    "task_pass": True,
+                    "boundary_pass": True,
+                    "reason": "Resolved the continuity disagreement.",
+                }
+            ]
+            report = self.score_v2(scorer, bundle, adjudications)
+
+        self.assertEqual(report["per_condition"]["no-skill"]["joint_passes"], 2)
+
+    def test_v2_reports_unobserved_routing_without_inference(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            bundle["routing"][0]["activation_observed"] = None
+            self.rewrite_rows(bundle["paths"]["routing"], bundle["routing"])
+            report = self.score_v2(scorer, bundle)
+
+        self.assertEqual(report["routing"]["unobserved"], 1)
+        self.assertEqual(report["behavior_by_activation"]["unobserved"]["scheduled"], 1)
+
+    def test_v2_formal_claim_requires_holdout_and_repetition_floor(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(
+                scorer,
+                Path(temporary_directory),
+                holdout=False,
+                result_label="formal",
+            )
+            report = self.score_v2(scorer, bundle)
+
+        self.assertEqual(report["claim_status"], "formal_ineligible")
+        self.assertIn("missing_holdout", report["claim_reasons"])
+        self.assertIn("insufficient_repetitions", report["claim_reasons"])
+
+    def test_v2_evidence_bundle_digest_is_deterministic(self):
+        scorer = self.load_scorer()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bundle = self.v2_bundle(scorer, Path(temporary_directory))
+            first = self.score_v2(scorer, bundle)
+            second = self.score_v2(scorer, bundle)
+
+        self.assertEqual(
+            first["evidence_bundle_sha256"], second["evidence_bundle_sha256"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
