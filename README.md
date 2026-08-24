@@ -32,6 +32,8 @@ The agent did not lack understanding or authorization. It walked up to the eleva
 
 No Re-Ask removes that unnecessary turn. When work is already requested, still in scope, and feasible now, the agent continues and reports the result. When a real choice, authority, or safety fact is missing, it still asks.
 
+This is not hypothetical. A developer described the rhythm as an agent asking for approval or what comes next just as the human starts something else; a commenter called the result “babysitting and rubber-stamping.” See [Background and source](./BACKGROUND.md).
+
 ## How it works
 
 The skill carries the authorization boundary of the current request forward until the requested work is completed, materially blocked, or explicitly withdrawn.
@@ -108,6 +110,10 @@ Implicit discovery may occur after the skill is installed, but explicit invocati
 A material clarification requests new information needed to act correctly or safely. It is not repeated permission for work already requested. Progress updates, elapsed time, and turn boundaries do not create a new authorization boundary.
 
 ## Boundaries
+
+No Re-Ask does not mean skipping safety approval, and it does not suppress host or tool permission gates. It governs whether the agent should ask the same conversational question again; the permissions enforced by the surrounding system remain fully in force.
+
+If the next action is destructive, irreversible, outside the requested scope, or dependent on a genuinely missing choice, authority, or safety fact, the agent must stop and ask one focused material question.
 
 No Re-Ask is a behavior skill and prompt-level mitigation. It has no runtime service or external dependency, and it is not a phrase blacklist: the decision depends on scope and state, not forbidden wording.
 

@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BACKGROUND = ROOT / "BACKGROUND.md"
 READMES = {
     "English": ROOT / "README.md",
     "Chinese": ROOT / "README.zh-CN.md",
@@ -76,15 +77,22 @@ OPERATIONAL_STRINGS = (
     "no-reask/assets/icon.svg",
 )
 GOAL_DOCS_URL = "https://learn.chatgpt.com/use-cases/follow-goals"
+BACKGROUND_URL = "./BACKGROUND.md"
+REDDIT_SOURCE_URL = (
+    "https://www.reddit.com/r/webdev/comments/1vrs9cw/"
+    "is_agentic_ai_making_you_procrastinate/"
+)
 APPROVED_LINK_DESTINATIONS = {
     "English": {
         "./README.zh-CN.md",
+        BACKGROUND_URL,
         "evals/evaluation-protocol.md",
         TEST_WORKFLOW_URL,
         GOAL_DOCS_URL,
     },
     "Chinese": {
         "./README.md",
+        BACKGROUND_URL,
         "evals/evaluation-protocol.md",
         TEST_WORKFLOW_URL,
         GOAL_DOCS_URL,
@@ -112,9 +120,33 @@ SCORER_COMMAND = "\n".join(
     )
 )
 BOUNDARY_PHRASES = {
-    "English": ("material clarification", "does not expand authorization",
-                "does not measure behavioral efficacy"),
-    "Chinese": ("实质性澄清", "不会扩大授权", "不能衡量行为效果"),
+    "English": (
+        "material clarification",
+        "does not expand authorization",
+        "does not mean skipping safety approval",
+        "does not suppress host or tool permission gates",
+        "irreversible",
+        "does not measure behavioral efficacy",
+    ),
+    "Chinese": (
+        "实质性澄清",
+        "不会扩大授权",
+        "不等于跳过安全审批",
+        "不会压过宿主或工具的权限门槛",
+        "不可逆",
+        "不能衡量行为效果",
+    ),
+}
+BACKGROUND_PHRASES = (
+    "BigBootyBear",
+    REDDIT_SOURCE_URL,
+    "babysitting and rubber-stamping",
+    "does not bypass security approval",
+    "不跳过安全审批",
+)
+BACKGROUND_LINK_COPY = {
+    "English": "[Background and source](./BACKGROUND.md)",
+    "Chinese": "[背景与来源](./BACKGROUND.md)",
 }
 POSITIONING_PHRASES = {
     "English": (
@@ -323,6 +355,18 @@ class ReadmeContractTest(unittest.TestCase):
                 document = self.read_required(label)
                 missing = [phrase for phrase in phrases if phrase not in document]
                 self.assertEqual(missing, [], f"{label} README is missing boundary text")
+
+    def test_background_documents_the_source_and_boundary(self):
+        self.assertTrue(BACKGROUND.is_file(), "BACKGROUND.md must exist")
+        document = BACKGROUND.read_text(encoding="utf-8")
+        self.assertTrue(document.strip(), "BACKGROUND.md must not be empty")
+        missing = [phrase for phrase in BACKGROUND_PHRASES if phrase not in document]
+        self.assertEqual(missing, [], "BACKGROUND.md is missing source or boundary text")
+
+    def test_both_readmes_link_to_the_background(self):
+        for label, phrase in BACKGROUND_LINK_COPY.items():
+            with self.subTest(language=label):
+                self.assertIn(phrase, self.read_required(label))
 
     def test_both_readmes_state_the_human_example_and_goal_distinction(self):
         for label, phrases in POSITIONING_PHRASES.items():
