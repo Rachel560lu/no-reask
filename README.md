@@ -115,15 +115,25 @@ The skill cannot guarantee activation in every interaction, and it does not eras
 
 ## Behavioral evaluation
 
-The behavioral evaluation uses a frozen prompt set, oracle, and schedule across four conditions: no-skill, comparator, explicit invocation, and implicit discovery. Model responses are generated externally and judgments are made independently; the scorer is deterministic and uses only the Python standard library.
+Verification has three deliberately separate layers. The required deterministic CI validates package, fixture, harness, and scorer mechanics without model credentials or model calls. A manually triggered model smoke run executes the public four-condition schedule through a fixed trusted adapter and labels its artifacts `pilot_no_efficacy_claim`. The protected self-hosted workflow accepts only the default branch, does not persist checkout credentials, and loads host/model/settings plus isolation and tool-permission attestations from `/opt/no-reask/eval-environment.json`; the adapter remains responsible for enforcing the declared OS/container sandbox. A formal release evaluation additionally requires a preregistered host/model snapshot, repeated runs, separate development and unpublished holdout corpora, independent blinded judgments, routing coverage, and per-corpus clustered confidence intervals.
+
+The schema-v2 scorer reports `continuity_pass`, `task_pass`, and `boundary_pass` separately, plus a joint result. This prevents fewer re-asks from hiding skipped work or unsafe persistence. Missing required readbacks fail task preservation, and routing is derived from an independent host trace rather than inferred from answer wording. The compatibility scorer is explicitly labeled `untrusted_legacy` and cannot support an efficacy claim.
 
 Follow the local [`evals/evaluation-protocol.md`](evals/evaluation-protocol.md), then score the prepared outputs and judgments with:
 
 ```sh
-python3 -I evals/score_eval.py --schedule evals/evaluation-schedule.jsonl --outputs artifacts/evaluation-outputs.jsonl --judgments artifacts/evaluation-judgments.jsonl --report artifacts/evaluation-report.json
+python3 -I evals/score_eval.py \
+  --manifest artifacts/run-manifest.json \
+  --schedule artifacts/evaluation-schedule.jsonl \
+  --prompts evals/evaluation-prompts.jsonl \
+  --oracle evals/evaluation-oracle.jsonl \
+  --outputs artifacts/evaluation-outputs.jsonl \
+  --judgments artifacts/evaluation-judgments.jsonl \
+  --routing-trace artifacts/evaluation-routing.jsonl \
+  --report artifacts/evaluation-report.json
 ```
 
-The checks validate the evaluation structure and scoring mechanics. Passing continuous integration does not measure behavioral efficacy, and this README does not claim an effect result.
+The checks validate the evaluation structure and scoring mechanics. Passing continuous integration does not measure behavioral efficacy, a pilot is not an efficacy percentage, and this README does not claim an effect result.
 
 ## Repository structure
 
