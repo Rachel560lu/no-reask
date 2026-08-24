@@ -280,6 +280,24 @@ class ContinuousIntegrationContractTest(unittest.TestCase):
         ]
         self.assertIn(TEST_COMMAND, commands)
 
+    def test_workflow_cancels_obsolete_runs(self):
+        document = self.read_workflow()
+        self.assertIn(
+            "group: test-${{ github.workflow }}-${{ github.ref }}", document
+        )
+        self.assertIn("cancel-in-progress: true", document)
+
+    def test_matrix_reports_all_failures_and_times_out(self):
+        document = self.read_workflow()
+        self.assertIn("fail-fast: false", document)
+        self.assertIn("timeout-minutes: 5", document)
+
+    def test_deterministic_ci_has_no_model_credentials_or_smoke_runner(self):
+        document = self.read_workflow().lower()
+        for forbidden in ("openai_api_key", "anthropic_api_key", "run_smoke.py"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, document)
+
 
 if __name__ == "__main__":
     unittest.main()
